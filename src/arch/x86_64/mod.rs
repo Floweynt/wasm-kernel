@@ -1,5 +1,6 @@
 use core::arch::asm;
 use core::arch::naked_asm;
+use x86::bits64::rflags::{self, RFlags};
 
 pub fn halt() -> ! {
     #[cfg(target_arch = "x86_64")]
@@ -44,4 +45,22 @@ pub unsafe extern "C" fn memset(dest: *mut u8, byte: i32, len: usize) -> *mut u8
         "mov rax, r11",
         "ret",
     )
+}
+
+#[inline(always)]
+pub fn disable_interrupts() {
+    unsafe {
+        asm!("cli");
+    }
+}
+
+#[inline(always)]
+pub fn enable_interrupts() {
+    unsafe {
+        asm!("sti");
+    }
+}
+
+pub fn has_interrupts() -> bool {
+    return rflags::read().contains(RFlags::FLAGS_IF);
 }

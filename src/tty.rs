@@ -1,12 +1,77 @@
+use core::fmt::{self, Error, Result, Write};
 use core::ptr;
-use flanterm::{flanterm_context, flanterm_fb_init, flanterm_write, flanterm_set_autoflush};
+use flanterm::{
+    flanterm_context, flanterm_fb_init, flanterm_flush, flanterm_set_autoflush, flanterm_write,
+};
 use limine::framebuffer::Framebuffer;
+use spin::Mutex;
 
-pub trait TTYHandler {
-    fn putc(&self, ch: char);
+use crate::arch::InterruptLockGuard;
+
+pub trait TTYHandler: Send + Sync {
+    fn putc(&mut self, ch: char);
 }
 
-// static data: *dyn TTYHandler = ptr::null();
+static TTY: Mutex<Option<&'static mut dyn TTYHandler>> = Mutex::new(None);
+static PRINT_LOCK: Mutex<()> = Mutex::new(());
+
+pub fn set_handler(handler: &'static mut dyn TTYHandler) {
+    let _int_guard = InterruptLockGuard::new();
+    let mut data = TTY.lock();
+    *data = Some(handler);
+}
+
+#[derive(Default)]
+struct GlobalPrintWriter;
+
+impl Write for GlobalPrintWriter {
+    fn write_str(&mut self, str: &str) -> Result {
+        let mut data = TTY.lock();
+        let tty = data.as_mut().ok_or(Error::default())?;
+        for ch in str.chars() {
+            tty.putc(ch);
+        }
+        Ok(())
+    }
+}
+
+pub struct UnlockedPrinter;
+
+impl UnlockedPrinter {
+    pub fn print(&mut self, args: fmt::Arguments) {
+        let mut pw = GlobalPrintWriter::default();
+        let _ = pw.write_fmt(args);
+    }
+
+    pub fn println(&mut self, args: fmt::Arguments) {
+        let mut pw = GlobalPrintWriter::default();
+        let _ = pw.write_fmt(format_args!("{}\n", args));
+    }
+}
+
+pub fn print_grouped<T: FnOnce(UnlockedPrinter)>(func: T) {
+    let _int_guard = InterruptLockGuard::new();
+    let _guard = PRINT_LOCK.lock();
+    let printer = UnlockedPrinter {};
+    func(printer);
+}
+
+#[doc(hidden)]
+pub fn _print(args: fmt::Arguments) {
+    let _int_guard = InterruptLockGuard::new();
+    let _guard = PRINT_LOCK.lock();
+    let mut pw = GlobalPrintWriter::default();
+    let _ = pw.write_fmt(args);
+}
+
+pub macro print {
+    ($($arg:tt)*) => ($crate::tty::_print(format_args!($($arg)*))),
+}
+
+pub macro println {
+    () => ($crate::tty::print!("\n")),
+    ($($arg:tt)*) => ($crate::tty::print!("{}\n", format_args!($($arg)*))),
+}
 
 pub struct FlanTermTTY {
     context: *mut flanterm_context,
@@ -53,12 +118,8 @@ impl FlanTermTTY {
     }
 }
 
-unsafe extern "C" {
-    pub fn flanterm_flush(ctx: *mut flanterm_context);
-}
-
 impl TTYHandler for FlanTermTTY {
-    fn putc(&self, ch: char) {
+    fn putc(&mut self, ch: char) {
         unsafe {
             flanterm_write(self.context, ptr::from_ref(&(ch as i8)), 1);
 
@@ -68,3 +129,6 @@ impl TTYHandler for FlanTermTTY {
         }
     }
 }
+
+unsafe impl Send for FlanTermTTY {}
+unsafe impl Sync for FlanTermTTY {}

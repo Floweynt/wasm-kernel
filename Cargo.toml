@@ -10,13 +10,17 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+bitflags = "2.10.0"
 flanterm = { version = "0.1.0", path = "flanterm" }
 limine = "0.5.0"
+spin = "0.10.0"
+static_cell = "2.1.1"
+x86 = "0.52.0"
 
 [workspace]
 members = ["buildtool", "flanterm"]
 
 [[bin]]
-name = "blog_os"
+name = "wasm-kernel"
 test = false
 bench = false

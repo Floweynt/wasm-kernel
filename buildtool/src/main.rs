@@ -1,4 +1,4 @@
-use anyhow::{Error, Result, bail};
+use anyhow::{Error, Result};
 use cargo_metadata::Message;
 use clap::{Parser, Subcommand};
 use fatfs::{FatType, FileSystem, FormatVolumeOptions, FsOptions, format_volume};
@@ -76,7 +76,13 @@ fn download_limine() -> Result<PathBuf> {
 
 fn build_kernel() -> Result<PathBuf> {
     let mut cmd = Command::new("cargo")
-        .args(&["build", "--message-format=json", "--target", "x86_64-unknown-none"])
+        .args(&[
+            "build",
+            "--message-format=json",
+            "--target",
+            "x86_64-unknown-none",
+            "-Zbuild-std=core,alloc"
+        ])
         .env("RUSTFLAGS", "-C relocation-model=static")
         .stdout(Stdio::piped())
         .spawn()?;
@@ -84,13 +90,15 @@ fn build_kernel() -> Result<PathBuf> {
     let stdout = cmd.stdout.take().expect("Failed to capture cargo stdout");
     let reader = BufReader::new(stdout);
 
+    let mut res = None;
+
     for message in Message::parse_stream(reader) {
         match message? {
             // TODO: check package
             Message::CompilerArtifact(artifact) => {
                 if let Some(executable) = artifact.executable {
                     println!("kernel image path: {}", executable);
-                    return Ok(PathBuf::from(executable));
+                    res = Some(PathBuf::from(executable));
                 }
             }
             Message::CompilerMessage(message) => {
@@ -100,7 +108,7 @@ fn build_kernel() -> Result<PathBuf> {
         }
     }
 
-    bail!("kernel binary not found")
+    Ok(res.ok_or(Error::msg("failed to locate executable"))?)
 }
 
 fn build_image(kernel_elf: &PathBuf) -> Result<()> {
@@ -240,9 +248,9 @@ fn gdb(kvm: bool) -> Result<()> {
     let gdb_args;
 
     if kvm {
-        gdb_args = vec!["target remote localhost:1234", "hbreak kinit", "c"]
+        gdb_args = vec!["target remote localhost:1234", "hbreak kmain", "c"]
     } else {
-        gdb_args = vec!["target remote localhost:1234", "b kinit", "c"]
+        gdb_args = vec!["target remote localhost:1234", "b kmain", "c"]
     }
 
     let kernel_elf_abs = kernel_elf.canonicalize()?;

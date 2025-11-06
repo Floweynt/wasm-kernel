@@ -27,14 +27,14 @@ SECTIONS
         *(.text .text.*)
     } :text
  
-    . += CONSTANT(MAXPAGESIZE);
+    . = ALIGN(CONSTANT(MAXPAGESIZE));
 
     .rodata : 
     {
         *(.rodata .rodata.*)
     } :rodata
  
-    . += CONSTANT(MAXPAGESIZE);
+    . = ALIGN(CONSTANT(MAXPAGESIZE));
 
     .data : 
     {
@@ -47,19 +47,10 @@ SECTIONS
         *(.bss .bss.*)
     } :data
 
-    .init_array : 
-    {
-        . = ALIGN(16);
-        PROVIDE (__start_init_array = .);
-        KEEP(*(.init_array))
-        KEEP(*(.init_array.*))
-        KEEP(*(.ctors))
-        KEEP(*(.ctors.*))
-        __end_init_array = .;
-    }
-
     /DISCARD/ : {
-        *(.eh_frame)
+        *(.got)
+        *(.comment)
+        *(.eh_frame*)
         *(.note .note.*)
     }
 }
