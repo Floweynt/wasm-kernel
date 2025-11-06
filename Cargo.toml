@@ -1,0 +1,22 @@
+[profile.release]
+panic = "abort"
+
+[profile.dev]
+panic = "abort"
+
+[package]
+name = "wasm-kernel"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+flanterm = { version = "0.1.0", path = "flanterm" }
+limine = "0.5.0"
+
+[workspace]
+members = ["buildtool", "flanterm"]
+
+[[bin]]
+name = "blog_os"
+test = false
+bench = false
