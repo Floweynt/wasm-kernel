@@ -1,6 +1,15 @@
+pub mod paging;
+
 use core::arch::asm;
 use core::arch::naked_asm;
+use x86::bits64::paging::PAddr;
+use x86::bits64::paging::VAddr;
 use x86::bits64::rflags::{self, RFlags};
+
+use crate::mem::ByteSize;
+use crate::mem::PageSize;
+use crate::mem::PhysicalAddress;
+use crate::mem::VirtualAddress;
 
 pub fn halt() -> ! {
     #[cfg(target_arch = "x86_64")]
@@ -63,4 +72,35 @@ pub fn enable_interrupts() {
 
 pub fn has_interrupts() -> bool {
     return rflags::read().contains(RFlags::FLAGS_IF);
+}
+
+pub const HIGHER_HALF_VIRTUAL_ADDRESS_BASE_PML4: VirtualAddress =
+    VirtualAddress::new(0xffff800000000000u64);
+pub const HIGHER_HALF_VIRTUAL_ADDRESS_BASE_PML5: VirtualAddress =
+    VirtualAddress::new(0xff00000000000000u64);
+
+pub const PAGE_SMALL_SIZE: u64 = 4096;
+pub const PAGE_MEDIUM_SIZE: u64 = 512 * PAGE_SMALL_SIZE;
+pub const PAGE_LARGE_SIZE: u64 = 512 * PAGE_MEDIUM_SIZE;
+pub const PAGE_MAX_SIZE: u64 = PAGE_LARGE_SIZE;
+
+pub const SMALL_PAGE_BYTE_SIZE: ByteSize = ByteSize::new(PAGE_SMALL_SIZE);
+pub const MEDIUM_PAGE_BYTE_SIZE: ByteSize = ByteSize::new(PAGE_MEDIUM_SIZE);
+pub const LARGE_PAGE_BYTE_SIZE: ByteSize = ByteSize::new(PAGE_LARGE_SIZE);
+
+pub const SMALL_PAGE_PAGE_SIZE: PageSize = PageSize::new(1);
+pub const MEDIUM_PAGE_PAGE_SIZE: PageSize = PageSize::new(512);
+pub const LARGE_PAGE_PAGE_SIZE: PageSize = PageSize::new(512 * 512);
+
+impl Into<VAddr> for VirtualAddress {
+    fn into(self) -> VAddr {
+        // TODO: don't unwrap
+        VAddr::from_u64(self.into())
+    }
+}
+
+impl Into<PAddr> for PhysicalAddress {
+    fn into(self) -> PAddr {
+        PAddr(self.into())
+    }
 }

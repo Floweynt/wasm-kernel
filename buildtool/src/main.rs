@@ -78,10 +78,10 @@ fn build_kernel() -> Result<PathBuf> {
     let mut cmd = Command::new("cargo")
         .args(&[
             "build",
-            "--message-format=json",
+            "--message-format=json-render-diagnostics",
             "--target",
             "x86_64-unknown-none",
-            "-Zbuild-std=core,alloc"
+            "-Zbuild-std=core,alloc",
         ])
         .env("RUSTFLAGS", "-C relocation-model=static")
         .stdout(Stdio::piped())
@@ -230,6 +230,8 @@ fn qemu(kvm: bool, cores: u8, mem_g: u8) -> Result<()> {
         format!("{}G", mem_g).to_string(),
         "-smp".to_string(),
         format!("{}", cores),
+        "-vga".to_string(),
+        "std".to_string(),
     ];
 
     if kvm {

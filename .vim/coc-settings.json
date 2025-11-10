@@ -1,3 +1,15 @@
 {
-    "cSpell.ignoreWords": ["limine", "framebuffer", "putc", "flanterm", "canonicalize", "elfio"]
+    "cSpell.ignoreWords": [
+        "limine",
+        "framebuffer",
+        "putc",
+        "flanterm",
+        "canonicalize",
+        "elfio",
+        "bootloader",
+        "cmdline",
+        "kmain",
+        "concat",
+        "hhdm"
+    ]
 }

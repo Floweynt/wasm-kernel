@@ -73,6 +73,22 @@ pub macro println {
     ($($arg:tt)*) => ($crate::tty::print!("{}\n", format_args!($($arg)*))),
 }
 
+pub macro red($text:expr) {
+    concat!("\x1b[31m", $text, "\x1b[0m")
+}
+
+pub macro green($text:expr) {
+    concat!("\x1b[32m", $text, "\x1b[0m")
+}
+
+pub macro yellow($text:expr) {
+    concat!("\x1b[33m", $text, "\x1b[0m")
+}
+
+pub macro blue($text:expr) {
+    concat!("\x1b[34m", $text, "\x1b[0m")
+}
+
 pub struct FlanTermTTY {
     context: *mut flanterm_context,
 }

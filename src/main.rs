@@ -4,14 +4,16 @@
 #![feature(decl_macro)]
 
 mod arch;
+mod mem;
 mod tty;
 
 use arch::halt;
 use core::cell::UnsafeCell;
-use core::panic;
 use limine::BaseRevision;
+use limine::firmware_type::FirmwareType;
 use limine::request::{
-    FramebufferRequest, MemoryMapRequest, RequestsEndMarker, RequestsStartMarker,
+    BootloaderInfoRequest, ExecutableCmdlineRequest, FirmwareTypeRequest, FramebufferRequest,
+    ModuleRequest, MpRequest, RequestsEndMarker, RequestsStartMarker, RsdpRequest, SmbiosRequest,
 };
 use static_cell::StaticCell;
 use tty::{FlanTermTTY, print_grouped, println};
@@ -22,11 +24,35 @@ static BASE_REVISION: BaseRevision = BaseRevision::with_revision(4);
 
 #[used]
 #[unsafe(link_section = ".limine_requests")]
+static BOOTLOADER_INFO_REQUEST: BootloaderInfoRequest = BootloaderInfoRequest::new();
+
+#[used]
+#[unsafe(link_section = ".limine_requests")]
+static CMDLINE_REQUEST: ExecutableCmdlineRequest = ExecutableCmdlineRequest::new();
+
+#[used]
+#[unsafe(link_section = ".limine_requests")]
+static FIRMWARE_TYPE_REQUEST: FirmwareTypeRequest = FirmwareTypeRequest::new();
+
+#[used]
+#[unsafe(link_section = ".limine_requests")]
 static FRAMEBUFFER_REQUEST: FramebufferRequest = FramebufferRequest::new();
 
 #[used]
 #[unsafe(link_section = ".limine_requests")]
-static MEMORY_MAP_REQUEST: MemoryMapRequest = MemoryMapRequest::new();
+static MP_REQUEST: MpRequest = MpRequest::new();
+
+#[used]
+#[unsafe(link_section = ".limine_requests")]
+static MODULE_REQUEST: ModuleRequest = ModuleRequest::new();
+
+#[used]
+#[unsafe(link_section = ".limine_requests")]
+static RSDP_REQUEST: RsdpRequest = RsdpRequest::new();
+
+#[used]
+#[unsafe(link_section = ".limine_requests")]
+static SMBIOS_REQUEST: SmbiosRequest = SmbiosRequest::new();
 
 #[used]
 #[unsafe(link_section = ".limine_requests_start")]
@@ -37,6 +63,31 @@ static _START_MARKER: RequestsStartMarker = RequestsStartMarker::new();
 static _END_MARKER: RequestsEndMarker = RequestsEndMarker::new();
 
 static FLANTERM_TTY: StaticCell<UnsafeCell<FlanTermTTY>> = StaticCell::new();
+
+fn dump_boot_info() {
+    if let Some(res) = BOOTLOADER_INFO_REQUEST.get_response() {
+        println!("kmain(): bootloader: {} v{}", res.name(), res.version());
+    }
+
+    if let Some(res) = CMDLINE_REQUEST.get_response() {
+        println!("kmain(): cmdline: \"{}\"", res.cmdline().to_str().unwrap());
+    }
+
+    if let Some(res) = FIRMWARE_TYPE_REQUEST.get_response() {
+        println!(
+            "kmain(): firmware: {}",
+            match res.firmware_type() {
+                FirmwareType::X86_BIOS => "bios",
+                FirmwareType::UEFI_32 => "efi_32",
+                FirmwareType::UEFI_64 => "efi_64",
+                FirmwareType::SBI => "sbi",
+                _ => "unknown",
+            }
+        );
+    }
+
+    mem::dump_memory_info();
+}
 
 #[unsafe(no_mangle)]
 unsafe extern "C" fn kmain() -> ! {
@@ -54,10 +105,11 @@ unsafe extern "C" fn kmain() -> ! {
 
     tty::set_handler(tty_mut);
 
-    println!("hello, world!");
-    println!("1");
-    println!("2");
-    panic!("meow");
+    println!("kmain(): tty initialized");
+    println!("kmain(): framebuffer: {}x{}", fb.width(), fb.height());
+
+    dump_boot_info();
+    mem::init();
 
     halt();
 }
