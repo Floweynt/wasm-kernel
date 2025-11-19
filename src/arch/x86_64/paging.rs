@@ -6,7 +6,7 @@ use crate::{
     arch::{LARGE_PAGE_PAGE_SIZE, MEDIUM_PAGE_PAGE_SIZE},
     mem::{
         PageFrameAllocator, PageFrameNumber, PageSize, PhysicalAddress, VirtualAddress,
-        VirtualPageFrameNumber,
+        VirtualPageFrameNumber, Wrapper,
     },
 };
 use limine::{paging::Mode, request::PagingModeRequest};
@@ -35,7 +35,8 @@ pub fn get_higher_half_addr() -> VirtualAddress {
 }
 
 // TODO: this should really be dynamic based on the current paging mode
-pub struct AddressSpace {
+#[derive(Clone, Copy)]
+pub struct PageTableSet {
     pml_addr: PageFrameNumber,
 }
 
@@ -49,7 +50,7 @@ macro impl_pte($ident:ident, $flags:ident) {
     impl PageTableEntry for $ident {
         fn create_page_map(addr: PageFrameNumber) -> Self {
             return $ident::new(
-                PAddr(addr.address().into()),
+                PAddr(addr.address().value()),
                 $flags::P | $flags::RW | $flags::US,
             );
         }
@@ -77,6 +78,29 @@ pub struct PageFlags {
     pub global: bool,
 }
 
+impl PageFlags {
+    pub const KERNEL_RW: PageFlags = PageFlags {
+        write: true,
+        user: false,
+        execute: false,
+        global: true,
+    };
+
+    pub const KERNEL_RO: PageFlags = PageFlags {
+        write: false,
+        user: false,
+        execute: false,
+        global: true,
+    };
+
+    pub const KERNEL_X: PageFlags = PageFlags {
+        write: false,
+        user: false,
+        execute: true,
+        global: true,
+    };
+}
+
 macro tl_flag($expr:expr, $type:ident::$flag_name:ident) {
     if $expr {
         $type::$flag_name
@@ -85,9 +109,9 @@ macro tl_flag($expr:expr, $type:ident::$flag_name:ident) {
     }
 }
 
-impl AddressSpace {
-    pub fn new<T: PageFrameAllocator>(alloc: &mut T) -> AddressSpace {
-        AddressSpace {
+impl PageTableSet {
+    pub fn new<T: PageFrameAllocator>(alloc: &mut T) -> PageTableSet {
+        PageTableSet {
             pml_addr: alloc.allocate_single_page(),
         }
     }
@@ -103,9 +127,12 @@ impl AddressSpace {
 
         let ptr = PhysicalAddress::new(table[index].address().0)
             .to_virtual()
-            .as_pointer::<P>();
+            .as_ptr_mut();
+
         unsafe { &mut *ptr }
     }
+
+    // TODO: figure out semantics for overwriting entries
 
     pub fn map_page_small<T: PageFrameAllocator>(
         &mut self,
@@ -114,7 +141,7 @@ impl AddressSpace {
         phys: PageFrameNumber,
         flags: &PageFlags,
     ) {
-        let pml4_ptr: *mut PML4 = self.pml_addr.address().to_virtual().as_pointer();
+        let pml4_ptr = self.pml_addr.address().to_virtual().as_ptr_mut();
         let pml4: &mut PML4 = unsafe { &mut *pml4_ptr };
 
         let pdpt = Self::walk_entry::<T, _, PDPT>(alloc, pml4, pml4_index(virt.address().into()));
@@ -123,7 +150,7 @@ impl AddressSpace {
 
         // TODO: we can't be sure XD exists, so maybe we need to check that?
         pt[pt_index(virt.address().into())] = PTEntry::new(
-            PAddr(phys.address().into()),
+            PAddr(phys.address().value()),
             PTFlags::P
                 | tl_flag!(flags.write, PTFlags::RW)
                 | tl_flag!(flags.user, PTFlags::US)
@@ -142,7 +169,7 @@ impl AddressSpace {
         assert!(virt.is_aligned(MEDIUM_PAGE_PAGE_SIZE));
         assert!(phys.is_aligned(MEDIUM_PAGE_PAGE_SIZE));
 
-        let pml4_ptr: *mut PML4 = self.pml_addr.address().to_virtual().as_pointer();
+        let pml4_ptr = self.pml_addr.address().to_virtual().as_ptr_mut();
         let pml4: &mut PML4 = unsafe { &mut *pml4_ptr };
 
         let pdpt = Self::walk_entry::<T, _, PDPT>(alloc, pml4, pml4_index(virt.address().into()));
@@ -150,7 +177,7 @@ impl AddressSpace {
 
         // TODO: we can't be sure XD exists, so maybe we need to check that?
         pd[pd_index(virt.address().into())] = PDEntry::new(
-            PAddr(phys.address().into()),
+            PAddr(phys.address().value()),
             PDFlags::P
                 | PDFlags::PS
                 | tl_flag!(flags.write, PDFlags::RW)
@@ -170,14 +197,14 @@ impl AddressSpace {
         assert!(virt.is_aligned(LARGE_PAGE_PAGE_SIZE));
         assert!(phys.is_aligned(LARGE_PAGE_PAGE_SIZE));
 
-        let pml4_ptr: *mut PML4 = self.pml_addr.address().to_virtual().as_pointer();
+        let pml4_ptr = self.pml_addr.address().to_virtual().as_ptr_mut();
         let pml4: &mut PML4 = unsafe { &mut *pml4_ptr };
 
         let pdpt = Self::walk_entry::<T, _, PDPT>(alloc, pml4, pml4_index(virt.address().into()));
 
         // TODO: we can't be sure XD exists, so maybe we need to check that?
         pdpt[pdpt_index(virt.address().into())] = PDPTEntry::new(
-            PAddr(phys.address().into()),
+            PAddr(phys.address().value()),
             PDPTFlags::P
                 | PDPTFlags::PS
                 | tl_flag!(flags.write, PDPTFlags::RW)
@@ -236,7 +263,7 @@ impl AddressSpace {
 
     pub unsafe fn set_current(&self) {
         unsafe {
-            cr3_write(self.pml_addr.address().into());
+            cr3_write(self.pml_addr.address().value());
         }
     }
 }

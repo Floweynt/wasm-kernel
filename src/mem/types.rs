@@ -1,41 +1,126 @@
-use crate::{arch::PAGE_SMALL_SIZE, mem::VM_LAYOUT};
+use crate::{
+    arch::{PAGE_SMALL_SIZE, SMALL_PAGE_PAGE_SIZE},
+    mem::VM_LAYOUT,
+};
 use core::{
-    fmt::{Debug, Display},
+    iter::Step,
     ops::{Add, AddAssign, Sub, SubAssign},
 };
-use derive_more::{Add, AddAssign, Constructor, SubAssign};
+use derive_more::{Add, AddAssign, Constructor, Debug, Display, Mul, SubAssign};
+
+pub trait Wrapper<T> {
+    fn value(self) -> T;
+}
 
 #[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Constructor)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Constructor, Default, Display, Debug)]
+#[display("{_0:#016x}")]
+#[debug("VirtualAddress({_0:#016x})")]
 pub struct VirtualAddress(u64);
 
 #[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Constructor)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Constructor, Default, Display, Debug)]
+#[display("{_0:#x}")]
+#[debug("PhysicalAddress({_0:#x})")]
 pub struct PhysicalAddress(u64);
 
 #[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Constructor)]
-pub struct PageFrameNumber(u64);
-
-#[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Constructor)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Constructor, Default, Display, Debug)]
+#[display("{_0:#013x}")]
+#[debug("VirtualPageFrameNumber({_0:#013x})")]
 pub struct VirtualPageFrameNumber(u64);
 
 #[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, AddAssign, SubAssign, Add, Constructor)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Constructor, Default, Display, Debug)]
+#[display("{_0:#x}")]
+#[debug("PageFrameNumber({_0:#x})")]
+pub struct PageFrameNumber(u64);
+
+#[repr(transparent)]
+#[derive(
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    AddAssign,
+    SubAssign,
+    Add,
+    Constructor,
+    Mul,
+    Default,
+    Display,
+    Debug,
+)]
+#[display("{_0:#x}")]
+#[debug("ByteSize({_0:#x})")]
 pub struct ByteSize(u64);
 
 #[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, AddAssign, SubAssign, Add, Constructor)]
+#[derive(
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    AddAssign,
+    SubAssign,
+    Add,
+    Constructor,
+    Mul,
+    Default,
+    Display,
+    Debug,
+)]
+#[display("{_0:#x}")]
+#[debug("ByteDiff({_0:#x})")]
 pub struct ByteDiff(i64);
 
 #[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, AddAssign, SubAssign, Add, Constructor)]
+#[derive(
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    AddAssign,
+    SubAssign,
+    Add,
+    Constructor,
+    Mul,
+    Default,
+    Display,
+    Debug,
+)]
+#[display("{_0:#x}")]
+#[debug("PageSize({_0:#x})")]
 pub struct PageSize(u64);
 
 #[repr(transparent)]
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, AddAssign, SubAssign, Add, Constructor)]
+#[derive(
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    AddAssign,
+    SubAssign,
+    Add,
+    Constructor,
+    Mul,
+    Default,
+    Display,
+    Debug,
+)]
+#[display("{_0:#x}")]
+#[debug("PageDiff({_0:#x})")]
 pub struct PageDiff(i64);
+
+// size helpers
 
 pub trait SizeType {
     fn size(self) -> u64;
@@ -53,6 +138,31 @@ impl SizeType for ByteSize {
     }
 }
 
+// step
+macro impl_step($type:ident) {
+    impl Step for $type {
+        fn steps_between(start: &Self, end: &Self) -> (usize, Option<usize>) {
+            if start.0 > end.0 {
+                (0, None)
+            } else {
+                let val = (end.0 - start.0) as usize;
+                (val, Some(val))
+            }
+        }
+
+        fn forward_checked(start: Self, count: usize) -> Option<Self> {
+            start.0.checked_add(count as u64).map(|f| Self(f))
+        }
+
+        fn backward_checked(start: Self, count: usize) -> Option<Self> {
+            start.0.checked_sub(count as u64).map(|f| Self(f))
+        }
+    }
+}
+
+impl_step!(ByteSize);
+impl_step!(PageSize);
+
 // implementations
 
 macro impl_assign($type:ident, $delta:ident) {
@@ -69,9 +179,9 @@ macro impl_assign($type:ident, $delta:ident) {
     }
 }
 
-macro impl_unwrap_into($type:ident, $value:ident) {
-    impl Into<$value> for $type {
-        fn into(self) -> $value {
+macro impl_value($type:ident, $value:ident) {
+    impl Wrapper<$value> for $type {
+        fn value(self) -> $value {
             self.0
         }
     }
@@ -122,6 +232,8 @@ macro impl_pagesize_math($type:ident) {
             self - Into::<ByteSize>::into(rhs)
         }
     }
+
+    impl_assign!($type, PageSize);
 }
 
 macro impl_diff($type:ident, $diff_type:ident) {
@@ -134,15 +246,15 @@ macro impl_diff($type:ident, $diff_type:ident) {
     }
 }
 
-impl_unwrap_into!(ByteSize, u64);
-impl_unwrap_into!(ByteDiff, i64);
-impl_unwrap_into!(PageSize, u64);
-impl_unwrap_into!(PageDiff, i64);
+impl_value!(ByteSize, u64);
+impl_value!(ByteDiff, i64);
+impl_value!(PageSize, u64);
+impl_value!(PageDiff, i64);
 
-impl_unwrap_into!(VirtualAddress, u64);
-impl_unwrap_into!(PhysicalAddress, u64);
-impl_unwrap_into!(PageFrameNumber, u64);
-impl_unwrap_into!(VirtualPageFrameNumber, u64);
+impl_value!(VirtualAddress, u64);
+impl_value!(PhysicalAddress, u64);
+impl_value!(PageFrameNumber, u64);
+impl_value!(VirtualPageFrameNumber, u64);
 
 impl_conv!(ByteSize, ByteDiff);
 impl_conv!(ByteDiff, ByteSize);
@@ -185,45 +297,13 @@ impl_diff!(PhysicalAddress, ByteDiff);
 impl_diff!(PageFrameNumber, PageDiff);
 impl_diff!(VirtualPageFrameNumber, PageDiff);
 
-// display/debug impl
-
-impl Display for VirtualAddress {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "{:016x}", self.0)
-    }
-}
-
-impl Debug for VirtualAddress {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "VirtualAddress({:016x})", self.0)
-    }
-}
-
-impl Display for PhysicalAddress {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "{:016x}", self.0)
-    }
-}
-
-impl Debug for PhysicalAddress {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "PhysicalAddress({:x})", self.0)
-    }
-}
-
-impl Display for PageFrameNumber {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl Debug for PageFrameNumber {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "PageFrameNumber({})", self.0)
-    }
-}
-
 // impl
+
+impl<T> From<*const T> for VirtualAddress {
+    fn from(value: *const T) -> Self {
+        Self(value as u64)
+    }
+}
 
 impl TryFrom<ByteSize> for PageSize {
     type Error = ();
@@ -238,6 +318,10 @@ impl TryFrom<ByteSize> for PageSize {
 }
 
 impl ByteSize {
+    pub const fn size_of<T>() -> ByteSize {
+        ByteSize::new(size_of::<T>() as u64)
+    }
+
     pub fn page_size_roundup(self) -> PageSize {
         PageSize((self.0 + PAGE_SMALL_SIZE - 1) / PAGE_SMALL_SIZE)
     }
@@ -267,11 +351,20 @@ impl VirtualAddress {
         layout.kernel_phys_base + (self - layout.kernel_base)
     }
 
-    pub fn frame_number(self) -> VirtualPageFrameNumber {
+    pub fn frame_containing(self) -> VirtualPageFrameNumber {
         VirtualPageFrameNumber(self.0 / PAGE_SMALL_SIZE)
     }
 
-    pub fn as_pointer<T>(&self) -> *mut T {
+    pub fn frame_aligned(self) -> VirtualPageFrameNumber {
+        assert!(self.is_aligned(SMALL_PAGE_PAGE_SIZE));
+        VirtualPageFrameNumber(self.0 / PAGE_SMALL_SIZE)
+    }
+
+    pub fn as_ptr<T>(&self) -> *const T {
+        return self.0 as *const T;
+    }
+
+    pub fn as_ptr_mut<T>(&self) -> *mut T {
         return self.0 as *mut T;
     }
 
@@ -294,7 +387,12 @@ impl PhysicalAddress {
         res
     }
 
-    pub fn frame_number(self) -> PageFrameNumber {
+    pub fn frame_containing(self) -> PageFrameNumber {
+        PageFrameNumber(self.0 / PAGE_SMALL_SIZE)
+    }
+
+    pub fn frame_aligned(self) -> PageFrameNumber {
+        assert!(self.is_aligned(SMALL_PAGE_PAGE_SIZE));
         PageFrameNumber(self.0 / PAGE_SMALL_SIZE)
     }
 
@@ -305,7 +403,7 @@ impl PhysicalAddress {
 
 impl PageFrameNumber {
     pub fn to_virtual(self) -> VirtualPageFrameNumber {
-        self.address().to_virtual().frame_number()
+        self.address().to_virtual().frame_aligned()
     }
 
     pub fn address(self) -> PhysicalAddress {
@@ -322,7 +420,83 @@ impl VirtualPageFrameNumber {
         VirtualAddress(self.0.checked_mul(PAGE_SMALL_SIZE).expect(""))
     }
 
+    pub fn as_ptr<T>(self) -> *const T {
+        self.address().as_ptr()
+    }
+
+    pub fn as_ptr_mut<T>(self) -> *mut T {
+        self.address().as_ptr_mut()
+    }
+
     pub fn is_aligned<T: SizeType>(self, size: T) -> bool {
         self.address().is_aligned(size)
+    }
+}
+
+pub trait AddressRange<D, A: Sub<A, Output = D> + PartialOrd, S: From<D>>: Sized + Copy {
+    fn new(min: A, max: A) -> Self;
+
+    fn start(&self) -> A;
+
+    fn end(&self) -> A;
+
+    fn size(&self) -> S {
+        (self.end() - self.start()).into()
+    }
+
+    fn tup(&self) -> (A, A) {
+        (self.start(), self.end())
+    }
+
+    fn empty(&self) -> bool {
+        self.start() == self.end()
+    }
+
+    fn contains(&self, value: A) -> bool {
+        self.start() <= value && value < self.end()
+    }
+
+    fn is_sub_range(&self, range: &Self) -> bool {
+        self.start() <= range.start() && range.end() <= self.end()
+    }
+
+    fn intersects(&self, range: &Self) -> bool {
+        self.start() < range.end() && range.start() < self.end()
+    }
+}
+
+#[derive(Default, Clone, Copy, PartialEq, Eq)]
+pub struct VARange(VirtualAddress, VirtualAddress);
+
+impl AddressRange<ByteDiff, VirtualAddress, ByteSize> for VARange {
+    fn new(min: VirtualAddress, max: VirtualAddress) -> VARange {
+        assert!(min <= max);
+        VARange(min, max)
+    }
+
+    fn start(&self) -> VirtualAddress {
+        self.0
+    }
+
+    fn end(&self) -> VirtualAddress {
+        self.1
+    }
+}
+
+#[derive(Default, Clone, Copy, PartialEq, Eq)]
+pub struct VFRange(VirtualPageFrameNumber, VirtualPageFrameNumber);
+
+impl AddressRange<PageDiff, VirtualPageFrameNumber, PageSize> for VFRange {
+    fn new(min: VirtualPageFrameNumber, max: VirtualPageFrameNumber) -> Self {
+        assert!(min <= max);
+        VFRange(min, max)
+    }
+
+    fn start(&self) -> VirtualPageFrameNumber {
+        self.0
+    }
+
+    fn end(&self) -> VirtualPageFrameNumber {
+        self.1
     }
 }

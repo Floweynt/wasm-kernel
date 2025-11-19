@@ -1,7 +1,15 @@
 pub mod paging;
 
+mod dt;
+mod interrupt;
+pub mod mp;
+mod serial;
+mod unwind;
+
 use core::arch::asm;
 use core::arch::naked_asm;
+use dt::GlobalDescriptorTable;
+use dt::InterruptStackTable;
 use x86::bits64::paging::PAddr;
 use x86::bits64::paging::VAddr;
 use x86::bits64::rflags::{self, RFlags};
@@ -10,6 +18,11 @@ use crate::mem::ByteSize;
 use crate::mem::PageSize;
 use crate::mem::PhysicalAddress;
 use crate::mem::VirtualAddress;
+use crate::mem::Wrapper;
+use crate::tty::println;
+
+pub use serial::*;
+pub use unwind::*;
 
 pub fn halt() -> ! {
     #[cfg(target_arch = "x86_64")]
@@ -95,12 +108,22 @@ pub const LARGE_PAGE_PAGE_SIZE: PageSize = PageSize::new(512 * 512);
 impl Into<VAddr> for VirtualAddress {
     fn into(self) -> VAddr {
         // TODO: don't unwrap
-        VAddr::from_u64(self.into())
+        VAddr::from_u64(self.value())
     }
 }
 
 impl Into<PAddr> for PhysicalAddress {
     fn into(self) -> PAddr {
-        PAddr(self.into())
+        PAddr(self.value())
     }
+}
+
+pub fn initialize_core(core_id: u64) {
+    println!("[{}] performing pre-core init", core_id);
+
+    let ist = InterruptStackTable::default();
+    let gdt = GlobalDescriptorTable::new(&ist);
+    unsafe { gdt.load() };
+
+    println!("[{}] done pre-core init", core_id);
 }

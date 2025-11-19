@@ -13,6 +13,9 @@ PHDRS
 SECTIONS
 {
     . = 0xffffffff80000000;
+    
+    _marker_kernel_start = .;
+    _marker_limine_request_start = .;
 
     .limine_requests : {
         KEEP(*(.limine_requests_start))
@@ -20,21 +23,40 @@ SECTIONS
         KEEP(*(.limine_requests_end))
     } :limine_requests
 
+    _marker_limine_request_end = .;
+
     . = ALIGN(CONSTANT(MAXPAGESIZE));
+
+    _marker_text_start = .;
 
     .text :
     {
         *(.text .text.*)
     } :text
+    
+    _marker_text_end = .;
  
     . = ALIGN(CONSTANT(MAXPAGESIZE));
+
+    _marker_rodata_start = .;
 
     .rodata : 
     {
         *(.rodata .rodata.*)
     } :rodata
+
+    _marker_got_start = .;
+    .got :
+    {
+        *(.got)
+    } :rodata
+    _marker_got_end = .;
+
+    _marker_rodata_end = .;
  
     . = ALIGN(CONSTANT(MAXPAGESIZE));
+
+    _marker_data_start = .;
 
     .data : 
     {
@@ -47,8 +69,10 @@ SECTIONS
         *(.bss .bss.*)
     } :data
 
+    _marker_data_end = .;
+    _marker_kernel_end = .;
+
     /DISCARD/ : {
-        *(.got)
         *(.comment)
         *(.eh_frame*)
         *(.note .note.*)

@@ -1,15 +1,13 @@
+use crate::arch::{InterruptLockGuard, UnwindContext};
 use core::fmt::{self, Error, Result, Write};
-use core::ptr;
-use flanterm::{
-    flanterm_context, flanterm_fb_init, flanterm_flush, flanterm_set_autoflush, flanterm_write,
-};
-use limine::framebuffer::Framebuffer;
 use spin::Mutex;
 
-use crate::arch::InterruptLockGuard;
+mod flanterm;
+
+pub use flanterm::*;
 
 pub trait TTYHandler: Send + Sync {
-    fn putc(&mut self, ch: char);
+    fn putc(&mut self, ch: u8);
 }
 
 static TTY: Mutex<Option<&'static mut dyn TTYHandler>> = Mutex::new(None);
@@ -28,8 +26,8 @@ impl Write for GlobalPrintWriter {
     fn write_str(&mut self, str: &str) -> Result {
         let mut data = TTY.lock();
         let tty = data.as_mut().ok_or(Error::default())?;
-        for ch in str.chars() {
-            tty.putc(ch);
+        for ch in str.as_bytes() {
+            tty.putc(*ch);
         }
         Ok(())
     }
@@ -46,6 +44,10 @@ impl UnlockedPrinter {
     pub fn println(&mut self, args: fmt::Arguments) {
         let mut pw = GlobalPrintWriter::default();
         let _ = pw.write_fmt(format_args!("{}\n", args));
+    }
+
+    pub fn writer(self) -> impl Write {
+        GlobalPrintWriter::default()
     }
 }
 
@@ -73,6 +75,19 @@ pub macro println {
     ($($arg:tt)*) => ($crate::tty::print!("{}\n", format_args!($($arg)*))),
 }
 
+pub unsafe fn dump_stack<T: Write>(writer: &mut T, mut context: UnwindContext) {
+    let mut i = 0;
+    while unsafe { context.valid() } {
+        let _ = writeln!(writer, "#{}: {:#016x}", i, unsafe {
+            context.return_address()
+        });
+        i += 1;
+        context = unsafe { context.next() };
+    }
+}
+
+// TODO this is really stupid
+
 pub macro red($text:expr) {
     concat!("\x1b[31m", $text, "\x1b[0m")
 }
@@ -89,62 +104,20 @@ pub macro blue($text:expr) {
     concat!("\x1b[34m", $text, "\x1b[0m")
 }
 
-pub struct FlanTermTTY {
-    context: *mut flanterm_context,
+pub struct MultiTTY {
+    left: &'static mut dyn TTYHandler,
+    right: &'static mut dyn TTYHandler,
 }
 
-impl FlanTermTTY {
-    pub fn from_framebuffer(fb: &Framebuffer) -> FlanTermTTY {
-        let context: *mut flanterm_context;
-
-        unsafe {
-            context = flanterm_fb_init(
-                None,
-                None,
-                fb.addr() as *mut u32,
-                usize::try_from(fb.width()).unwrap(),
-                usize::try_from(fb.height()).unwrap(),
-                usize::try_from(fb.pitch()).unwrap(),
-                fb.red_mask_size(),
-                fb.red_mask_shift(),
-                fb.green_mask_size(),
-                fb.green_mask_shift(),
-                fb.blue_mask_size(),
-                fb.blue_mask_shift(),
-                ptr::null_mut(),
-                ptr::null_mut(),
-                ptr::null_mut(),
-                ptr::null_mut(),
-                ptr::null_mut(),
-                ptr::null_mut(),
-                ptr::null_mut(),
-                ptr::null_mut(),
-                0usize,
-                0usize,
-                1usize,
-                0usize,
-                0usize,
-                0usize,
-            );
-
-            flanterm_set_autoflush(context, false);
-        }
-
-        FlanTermTTY { context: context }
+impl MultiTTY {
+    pub fn new(left: &'static mut dyn TTYHandler, right: &'static mut dyn TTYHandler) -> MultiTTY {
+        MultiTTY { left, right }
     }
 }
 
-impl TTYHandler for FlanTermTTY {
-    fn putc(&mut self, ch: char) {
-        unsafe {
-            flanterm_write(self.context, ptr::from_ref(&(ch as i8)), 1);
-
-            if ch == '\n' {
-                flanterm_flush(self.context);
-            }
-        }
+impl TTYHandler for MultiTTY {
+    fn putc(&mut self, ch: u8) {
+        self.left.putc(ch);
+        self.right.putc(ch);
     }
 }
-
-unsafe impl Send for FlanTermTTY {}
-unsafe impl Sync for FlanTermTTY {}

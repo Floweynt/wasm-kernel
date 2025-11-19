@@ -2,12 +2,20 @@
 #![no_main]
 #![feature(sync_unsafe_cell)]
 #![feature(decl_macro)]
+#![feature(const_range)]
+#![feature(const_trait_impl)]
+#![feature(stmt_expr_attributes)]
+#![feature(assert_matches)]
+#![feature(step_trait)]
+#![feature(iter_map_windows)]
 
 mod arch;
+mod cmdline;
 mod mem;
+mod mp;
 mod tty;
 
-use arch::halt;
+use arch::{SerialTTY, UnwindContext, halt, initialize_core};
 use core::cell::UnsafeCell;
 use limine::BaseRevision;
 use limine::firmware_type::FirmwareType;
@@ -16,7 +24,7 @@ use limine::request::{
     ModuleRequest, MpRequest, RequestsEndMarker, RequestsStartMarker, RsdpRequest, SmbiosRequest,
 };
 use static_cell::StaticCell;
-use tty::{FlanTermTTY, print_grouped, println};
+use tty::{FlanTermTTY, MultiTTY, dump_stack, print_grouped, println};
 
 #[used]
 #[unsafe(link_section = ".limine_requests")]
@@ -63,6 +71,8 @@ static _START_MARKER: RequestsStartMarker = RequestsStartMarker::new();
 static _END_MARKER: RequestsEndMarker = RequestsEndMarker::new();
 
 static FLANTERM_TTY: StaticCell<UnsafeCell<FlanTermTTY>> = StaticCell::new();
+static SERIAL_TTY: StaticCell<UnsafeCell<SerialTTY>> = StaticCell::new();
+static DUAL_FLANTERM_TTY: StaticCell<UnsafeCell<MultiTTY>> = StaticCell::new();
 
 fn dump_boot_info() {
     if let Some(res) = BOOTLOADER_INFO_REQUEST.get_response() {
@@ -89,8 +99,11 @@ fn dump_boot_info() {
     mem::dump_memory_info();
 }
 
-#[unsafe(no_mangle)]
-unsafe extern "C" fn kmain() -> ! {
+fn init_tty() {
+    let serial_tty = SERIAL_TTY
+        .init(UnsafeCell::new(SerialTTY::open(0x3f8)))
+        .get_mut();
+
     let fb = &FRAMEBUFFER_REQUEST
         .get_response()
         .unwrap()
@@ -98,18 +111,34 @@ unsafe extern "C" fn kmain() -> ! {
         .next()
         .unwrap();
 
-    let tty = FlanTermTTY::from_framebuffer(fb);
-    let cell_ref = FLANTERM_TTY.init(UnsafeCell::new(tty));
+    let flanterm_tty = FLANTERM_TTY
+        .init(UnsafeCell::new(FlanTermTTY::from_framebuffer(fb)))
+        .get_mut();
 
-    let tty_mut = unsafe { &mut *cell_ref.get() };
-
-    tty::set_handler(tty_mut);
+    tty::set_handler(
+        DUAL_FLANTERM_TTY
+            .init(UnsafeCell::new(MultiTTY::new(serial_tty, flanterm_tty)))
+            .get_mut(),
+    );
 
     println!("kmain(): tty initialized");
     println!("kmain(): framebuffer: {}x{}", fb.width(), fb.height());
+}
 
+#[unsafe(no_mangle)]
+unsafe extern "C" fn kmain() -> ! {
+    init_tty();
     dump_boot_info();
     mem::init();
+
+    /*
+    if let Some(mp) = MP_REQUEST.get_response() {
+        for ele in mp.cpus() {}
+    }*/
+
+    // test some cursed stuff
+
+    initialize_core(0);
 
     halt();
 }
@@ -127,6 +156,10 @@ fn rust_panic(info: &core::panic::PanicInfo) -> ! {
             )),
             None => printer.println(format_args!("at unknown location")),
         };
+
+        unsafe {
+            dump_stack(&mut printer.writer(), UnwindContext::get());
+        }
     });
 
     halt()

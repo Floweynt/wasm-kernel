@@ -13,6 +13,8 @@ fn main() {
         .flag("-mno-mmx")
         .flag("-mno-80387")
         .flag("-fno-stack-protector")
+        .flag("-fno-PIC")
+        .flag("-mcmodel=kernel")
         .compile("flanterm");
 
     let bindings = bindgen::Builder::default()

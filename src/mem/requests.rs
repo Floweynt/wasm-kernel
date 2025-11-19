@@ -1,6 +1,6 @@
 use limine::{
     memory_map::{self, EntryType},
-    request::{ExecutableAddressRequest, ExecutableFileRequest, HhdmRequest, MemoryMapRequest},
+    request::{ExecutableAddressRequest, HhdmRequest, MemoryMapRequest},
     response::MemoryMapResponse,
 };
 
@@ -20,18 +20,6 @@ pub(super) static MEMORY_MAP_REQUEST: MemoryMapRequest = MemoryMapRequest::new()
 #[unsafe(link_section = ".limine_requests")]
 pub(super) static KERNEL_ADDRESS_REQUEST: ExecutableAddressRequest =
     ExecutableAddressRequest::new();
-
-#[used]
-#[unsafe(link_section = ".limine_requests")]
-pub(super) static EXECUTABLE_FILE_REQUEST: ExecutableFileRequest = ExecutableFileRequest::new();
-
-pub fn get_kernel_size() -> ByteSize {
-    let response = EXECUTABLE_FILE_REQUEST
-        .get_response()
-        .expect("executable file response not received");
-
-    ByteSize::new(response.file().size())
-}
 
 pub fn get_hhdm_start() -> VirtualAddress {
     let response = HHDM_INFO_REQUEST
@@ -95,7 +83,7 @@ impl MemoryMapView {
 
     fn translate(entry: &memory_map::Entry) -> MemoryMapEntry {
         MemoryMapEntry {
-            start: PhysicalAddress::new(entry.base).frame_number(),
+            start: PhysicalAddress::new(entry.base).frame_aligned(),
             size: ByteSize::new(entry.length)
                 .try_into()
                 .expect("hhdm entry size is not page aligned"),
