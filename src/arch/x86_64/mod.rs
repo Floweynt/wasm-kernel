@@ -6,6 +6,13 @@ pub mod mp;
 mod serial;
 mod unwind;
 
+extern crate alloc;
+
+use crate::mem::ByteSize;
+use crate::mem::PageSize;
+use crate::mem::PhysicalAddress;
+use crate::mem::VirtualAddress;
+use crate::mem::Wrapper;
 use core::arch::asm;
 use core::arch::naked_asm;
 use dt::GlobalDescriptorTable;
@@ -13,13 +20,6 @@ use dt::InterruptStackTable;
 use x86::bits64::paging::PAddr;
 use x86::bits64::paging::VAddr;
 use x86::bits64::rflags::{self, RFlags};
-
-use crate::mem::ByteSize;
-use crate::mem::PageSize;
-use crate::mem::PhysicalAddress;
-use crate::mem::VirtualAddress;
-use crate::mem::Wrapper;
-use crate::tty::println;
 
 pub use serial::*;
 pub use unwind::*;
@@ -118,12 +118,37 @@ impl Into<PAddr> for PhysicalAddress {
     }
 }
 
-pub fn initialize_core(core_id: u64) {
-    println!("[{}] performing pre-core init", core_id);
+pub unsafe fn switch_stack(
+    stack: VirtualAddress,
+    target: extern "C" fn(u64) -> !,
+    param: u64,
+) -> ! {
+    assert!(stack.is_aligned(ByteSize::new(16)));
+    unsafe {
+        asm!(
+            "movq {stack}, %rsp",
+            "pushq $0",
+            "movq {param}, %rdi",
+            "jmp {target}",
+            stack = in(reg) stack.value(),
+            target = in(reg) target,
+            param = in(reg) param
+        );
+    }
 
-    let ist = InterruptStackTable::default();
-    let gdt = GlobalDescriptorTable::new(&ist);
-    unsafe { gdt.load() };
-
-    println!("[{}] done pre-core init", core_id);
+    unreachable!();
 }
+
+pub fn load_core_local_ptr() -> VirtualAddress {
+    let value: u64;
+    unsafe {
+        asm!(
+            "movq %gs:0, {}",
+            lateout(reg) value,
+            options(nostack, preserves_flags, pure, readonly),
+        );
+    }
+
+    VirtualAddress::new(value)
+}
+

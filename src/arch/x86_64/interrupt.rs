@@ -1,6 +1,6 @@
 use core::arch::naked_asm;
 
-use crate::tty::println;
+use log::info;
 
 #[repr(C)]
 struct InterruptContext {
@@ -14,6 +14,14 @@ struct InterruptContext {
     rflags: u64,
     rsp: u64,
     ss: u64,
+}
+
+const fn has_error_code(int_no: u8) -> u64 {
+    if int_no == 8 || (10..=14).contains(&int_no) || int_no == 17 || int_no == 21 {
+        0
+    } else {
+        8
+    }
 }
 
 #[unsafe(naked)]
@@ -79,12 +87,12 @@ pub unsafe extern "C" fn irq_handler_entry<const I: u8>() -> ! {
         "addq $16, %rsp",
         "iretq",
         const I,
-        const if I == 8 || (10..=14).contains(&I) || I == 17 || I == 21  { 0 } else { 8 },
+        const has_error_code(I),
         sym irq_handler_trampoline
     );
 }
 
 unsafe extern "C" fn irq_handler_trampoline(addr: *mut InterruptContext) {
     let mut context = unsafe { &*addr };
-    println!("hi!");
+    info!("hi!");
 }

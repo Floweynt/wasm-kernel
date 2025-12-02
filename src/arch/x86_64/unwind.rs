@@ -1,5 +1,6 @@
 use x86::bits64::registers::rbp;
 
+#[derive(Clone, Copy)]
 pub struct UnwindContext {
     ptr: *const u64,
 }

@@ -1,12 +1,10 @@
 use super::{
-    AddressRange, ByteSize, PMM, PageFrameAllocator, PageSize, VARange, VFRange, VirtualAddress,
-    VirtualPageFrameNumber, Wrapper,
+    AddressRange, ByteSize, PMM, PageFrameAllocator, PageSize, VFRange, VirtualPageFrameNumber,
+    Wrapper,
 };
-use crate::{
-    arch::paging::{PageFlags, PageTableSet},
-    tty::println,
-};
+use crate::arch::paging::{PageFlags, PageTableSet};
 use core::alloc::GlobalAlloc;
+use log::info;
 use spin::{Mutex, Once};
 use talc::{OomHandler, Span, Talc, Talck};
 
@@ -39,7 +37,11 @@ impl OomHandler for BumpHeap {
 
         let final_span = Span::new(base.as_ptr_mut(), this.limit.as_ptr_mut());
 
-        unsafe { talc.extend(initial_span, final_span) };
+        if initial_span.is_empty() {
+            unsafe { talc.claim(final_span).expect("initial heap claim failed") };
+        } else {
+            unsafe { talc.extend(initial_span, final_span) };
+        }
 
         Ok(())
     }
@@ -82,7 +84,7 @@ static GLOBAL_ALLOC: GlobalAllocImpl = GlobalAllocImpl {
 };
 
 pub(super) fn init_malloc(heap_range: VFRange, addr: PageTableSet) {
-    println!("mem::init_malloc(): initializing heap");
+    info!("mem::init_malloc(): initializing heap");
 
     GLOBAL_ALLOC.delegate.call_once(|| {
         Talck::new(Talc::new(BumpHeap {

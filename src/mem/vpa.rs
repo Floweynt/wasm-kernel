@@ -1,44 +1,171 @@
 // TODO: make malloc
 
 extern crate alloc;
-use core::default;
 
-use super::{AddressRange, PageSize, VFRange, VirtualPageFrameNumber};
-use crate::arch::paging::PageTableSet;
+use super::{AddressRange, PageFrameAllocator, PageSize, VFRange, VirtualPageFrameNumber};
+use crate::arch::paging::{PageFlags, PageTableSet};
 use alloc::boxed::Box;
 use arrayvec::ArrayVec;
-use intrusive_collections::{
-    Bound, KeyAdapter, RBTree, RBTreeLink, UnsafeRef, intrusive_adapter, linked_list::CursorMut,
-};
+use intrusive_collections::{Bound, KeyAdapter, RBTree, RBTreeLink, UnsafeRef, intrusive_adapter};
+use spin::{Mutex, Once};
 
-pub trait VirtualAllocator {
+pub trait VirtualAllocatorHandler {
     fn allocate(&mut self, size: PageSize) -> Option<VirtualPageFrameNumber>;
 
-    fn free(&mut self, base: VirtualPageFrameNumber, size: PageSize) -> Result<(), ()>;
+    fn free(&mut self, range: VFRange) -> Result<(), ()>;
 
     fn free_list_iterator(&self) -> impl Iterator<Item = &VFRange>;
 }
 
+pub struct VirtualAllocator<T: VirtualAllocatorHandler> {
+    inner: Mutex<T>,
+}
+
+unsafe impl<T: VirtualAllocatorHandler> Sync for VirtualAllocator<T> {}
+unsafe impl<T: VirtualAllocatorHandler> Send for VirtualAllocator<T> {}
+
+pub struct VirtualAllocation<'a, T: VirtualAllocatorHandler> {
+    usable: VFRange,
+    range: VFRange,
+    alloc: &'a VirtualAllocator<T>,
+    is_dropped: bool,
+}
+
+impl<'a, T: VirtualAllocatorHandler> VirtualAllocation<'a, T> {
+    pub fn leak(&mut self) -> VFRange {
+        self.is_dropped = true;
+        self.usable
+    }
+
+    pub fn range(&self) -> VFRange {
+        self.range
+    }
+}
+
+impl<'a, T: VirtualAllocatorHandler> Drop for VirtualAllocation<'a, T> {
+    fn drop(&mut self) {
+        if !self.is_dropped {
+            self.is_dropped = true;
+            self.alloc.free(self.range).expect("range already freed?");
+        }
+    }
+}
+
+pub struct BackedVirtualAllocation<'a, T: VirtualAllocatorHandler> {
+    virtual_allocation: VirtualAllocation<'a, T>,
+}
+
+impl<'a, T: VirtualAllocatorHandler> Drop for BackedVirtualAllocation<'a, T> {
+    fn drop(&mut self) {
+        todo!();
+    }
+}
+
+impl<'a, T: VirtualAllocatorHandler> BackedVirtualAllocation<'a, T> {
+    pub fn leak(&mut self) -> VFRange {
+        self.virtual_allocation.leak()
+    }
+
+    pub fn range(&self) -> VFRange {
+        self.virtual_allocation.range()
+    }
+}
+
+impl VirtualAllocator<EarlyAllocator> {
+    pub fn early(range: VFRange, reservations: &[VFRange]) -> Result<Self, ()> {
+        let mut early = EarlyAllocator::new(range);
+
+        for ele in reservations {
+            early.reserve_range(*ele)?;
+        }
+
+        Ok(VirtualAllocator {
+            inner: Mutex::new(early),
+        })
+    }
+}
+
+impl VirtualAllocator<TreeAllocator> {
+    pub fn tree(range: VirtualAllocator<EarlyAllocator>) -> VirtualAllocator<TreeAllocator> {
+        VirtualAllocator {
+            inner: Mutex::new(TreeAllocator::new(&*range.inner.lock())),
+        }
+    }
+}
+
+impl<T: VirtualAllocatorHandler> VirtualAllocator<T> {
+    pub fn allocate_padded(
+        &self,
+        size: PageSize,
+        padding: PageSize,
+    ) -> Option<VirtualAllocation<'_, T>> {
+        let alloc_size = padding + size + padding;
+        self.inner
+            .lock()
+            .allocate(alloc_size)
+            .map(|base| VirtualAllocation {
+                range: VFRange::sized(base, alloc_size),
+                usable: VFRange::sized(base + padding, size),
+                alloc: self,
+                is_dropped: false,
+            })
+    }
+
+    pub fn allocate(&self, size: PageSize) -> Option<VirtualAllocation<'_, T>> {
+        self.allocate_padded(size, PageSize::new(0))
+    }
+
+    pub fn allocate_backed_padded<P: PageFrameAllocator>(
+        &self,
+        pmm: &P,
+        tables: &PageTableSet,
+        size: PageSize,
+        padding: PageSize,
+        flags: PageFlags,
+    ) -> Option<BackedVirtualAllocation<'_, T>> {
+        let range = self.allocate_padded(size, padding)?;
+        for addr in range.range().as_rust_range() {
+            let phys = pmm.allocate_single_page();
+            tables.map_page_small(pmm, addr, phys, &flags);
+        }
+
+        Some(BackedVirtualAllocation {
+            virtual_allocation: range,
+        })
+    }
+
+    pub fn allocate_backed<P: PageFrameAllocator>(
+        &self,
+        pmm: &P,
+        tables: &PageTableSet,
+        size: PageSize,
+        flags: PageFlags,
+    ) -> Option<BackedVirtualAllocation<'_, T>> {
+        self.allocate_backed_padded(pmm, tables, size, PageSize::new(0), flags)
+    }
+
+    pub fn free(&self, range: VFRange) -> Result<(), ()> {
+        self.inner.lock().free(range)
+    }
+}
+
 // the "very early" virtual page allocator
-pub struct EarlyVirtualAllocator {
+pub struct EarlyAllocator {
     free_ranges: ArrayVec<VFRange, 8>,
 }
 
-impl EarlyVirtualAllocator {
-    pub fn new(
-        start: VirtualPageFrameNumber,
-        end: VirtualPageFrameNumber,
-    ) -> EarlyVirtualAllocator {
-        EarlyVirtualAllocator {
+impl EarlyAllocator {
+    fn new(range: VFRange) -> EarlyAllocator {
+        EarlyAllocator {
             free_ranges: {
                 let mut vec = ArrayVec::new();
-                vec.push(VFRange::new(start, end));
+                vec.push(range);
                 vec
             },
         }
     }
 
-    pub fn reserve_range(&mut self, range: VFRange) -> Result<(), ()> {
+    fn reserve_range(&mut self, range: VFRange) -> Result<(), ()> {
         for (index, value) in self.free_ranges.iter().enumerate() {
             if value.intersects(&range) {
                 if !value.is_sub_range(&range) {
@@ -66,7 +193,7 @@ impl EarlyVirtualAllocator {
     }
 }
 
-impl VirtualAllocator for EarlyVirtualAllocator {
+impl VirtualAllocatorHandler for EarlyAllocator {
     fn allocate(&mut self, size: PageSize) -> Option<VirtualPageFrameNumber> {
         for (index, value) in self.free_ranges.iter().enumerate() {
             if value.size() >= size {
@@ -88,7 +215,7 @@ impl VirtualAllocator for EarlyVirtualAllocator {
         None
     }
 
-    fn free(&mut self, _: VirtualPageFrameNumber, _: PageSize) -> Result<(), ()> {
+    fn free(&mut self, _: VFRange) -> Result<(), ()> {
         panic!("not implemented")
     }
 
@@ -124,14 +251,14 @@ impl<'a> KeyAdapter<'a> for VirtualRangeBaseAdapter {
     }
 }
 
-pub struct TreeVirtualAllocator {
+pub struct TreeAllocator {
     by_size: RBTree<VirtualRangeSizeAdapter>,
     by_base: RBTree<VirtualRangeBaseAdapter>,
 }
 
-impl TreeVirtualAllocator {
-    pub fn new<T: VirtualAllocator>(allocator: T) -> TreeVirtualAllocator {
-        let mut alloc = TreeVirtualAllocator {
+impl TreeAllocator {
+    fn new<T: VirtualAllocatorHandler>(allocator: &T) -> TreeAllocator {
+        let mut alloc = TreeAllocator {
             by_size: RBTree::default(),
             by_base: RBTree::default(),
         };
@@ -156,7 +283,7 @@ impl TreeVirtualAllocator {
     }
 }
 
-impl VirtualAllocator for TreeVirtualAllocator {
+impl VirtualAllocatorHandler for TreeAllocator {
     fn allocate(&mut self, size: PageSize) -> Option<VirtualPageFrameNumber> {
         let mut cursor = self.by_size.lower_bound_mut(Bound::Included(&size));
 
@@ -178,11 +305,8 @@ impl VirtualAllocator for TreeVirtualAllocator {
         }
     }
 
-    fn free(&mut self, base: VirtualPageFrameNumber, size: PageSize) -> Result<(), ()> {
-        let mut range = VFRange::new(base, base + size);
-
+    fn free(&mut self, mut range: VFRange) -> Result<(), ()> {
         let left_cursor = self.by_base.lower_bound(Bound::Excluded(&range.start()));
-
         let right_cursor = self.by_base.lower_bound(Bound::Included(&range.end()));
 
         if let Some(left) = left_cursor.get() {
@@ -239,7 +363,12 @@ impl VirtualAllocator for TreeVirtualAllocator {
     }
 }
 
-pub struct AddressSpace<T: VirtualAllocator> {
-    pub virtual_alloc: T,
-    pub tables: PageTableSet,
+static GLOBAL_VPA: Once<VirtualAllocator<TreeAllocator>> = Once::new();
+
+pub(super) fn initialize(alloc: VirtualAllocator<TreeAllocator>) {
+    GLOBAL_VPA.call_once(|| alloc);
+}
+
+pub fn get_global_vpa() -> &'static VirtualAllocator<TreeAllocator> {
+    GLOBAL_VPA.get().expect("vpa: GLOBAL_VPA not initialized")
 }

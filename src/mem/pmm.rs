@@ -1,17 +1,34 @@
-use super::{
-    EarlyPMM, MemoryMapView, PageFrameAllocator, PageFrameNumber, PageSize, VirtualAddress,
-};
+use super::{EarlyPMM, MemoryMapView, PageFrameNumber, PageSize, VirtualAddress};
 use crate::{
     arch::{
-        SMALL_PAGE_PAGE_SIZE,
-        paging::{PageTableSet, PageFlags},
+        PAGE_SMALL_SIZE, SMALL_PAGE_PAGE_SIZE,
+        paging::{PageFlags, PageTableSet},
     },
     mem::{ByteSize, MemoryMapType, Wrapper},
-    tty::println,
 };
+use core::ptr;
+use log::info;
 use page_info::PageState;
 use spin::{Mutex, Once};
 use static_assertions::const_assert;
+
+pub trait PageFrameAllocator {
+    fn allocate_single_page(&self) -> PageFrameNumber;
+
+    fn allocate_zeroed_page(&self) -> PageFrameNumber {
+        let frame = self.allocate_single_page();
+
+        unsafe {
+            ptr::write_bytes(
+                frame.to_virtual().as_ptr_mut::<u8>(),
+                0,
+                PAGE_SMALL_SIZE as usize,
+            )
+        };
+
+        frame
+    }
+}
 
 pub mod page_info {
     use crate::mem::PageFrameNumber;
@@ -49,7 +66,7 @@ fn get_page_info(frame: PageFrameNumber) -> &'static mut page_info::Page {
 }
 
 pub(super) fn init_pdt(
-    pmm: &mut EarlyPMM,
+    pmm: &EarlyPMM,
     address_space: &mut PageTableSet,
     start: VirtualAddress,
     hhdm_size: PageSize,
@@ -59,7 +76,7 @@ pub(super) fn init_pdt(
     // we need to first populate the pdt by allocating backing pages and setting up the memory
     // mappings, then we can actually populate the table
 
-    println!("mem::init_pdt(): mapping for pdt...");
+    info!("mem::init_pdt(): mapping for pdt...");
 
     let mut prev = None;
     for entry in MemoryMapView::get().iter() {
@@ -83,7 +100,7 @@ pub(super) fn init_pdt(
         }
     }
 
-    println!("mem::init_pdt(): built pdt mappings");
+    info!("mem::init_pdt(): built pdt mappings");
 
     pmm.freeze();
 
@@ -119,7 +136,7 @@ pub(super) fn init_pdt(
 
     *pdt.free_list.lock() = next_free;
 
-    println!("mem::init_pdt(): wrote physical page data table");
+    info!("mem::init_pdt(): wrote physical page data table");
 }
 
 pub struct PMM {
@@ -127,7 +144,7 @@ pub struct PMM {
 }
 
 impl PageFrameAllocator for PMM {
-    fn allocate_single_page(&mut self) -> PageFrameNumber {
+    fn allocate_single_page(&self) -> PageFrameNumber {
         // TODO: maybe use results more
         self.allocate_pages(PageSize::new(1))
             .expect("out of memory")
@@ -141,7 +158,7 @@ impl PMM {
         }
     }
 
-    fn allocate_pages(&mut self, count: PageSize) -> Option<PageFrameNumber> {
+    fn allocate_pages(&self, count: PageSize) -> Option<PageFrameNumber> {
         // TODO
         assert!(count.value() == 1);
         let mut free_list = self.pdt.free_list.lock();

@@ -1,16 +1,16 @@
 mod init;
+mod malloc;
+mod pmm;
 mod requests;
 mod types;
-mod pmm;
-mod malloc;
-mod vpa;
+pub mod vpa;
 
 pub use init::*;
-pub use requests::*;
-pub use types::*;
 pub use pmm::*;
-pub use malloc::*;
+pub use requests::*;
+use spin::Once;
+pub use types::*;
 
-pub trait PageFrameAllocator {
-    fn allocate_single_page(&mut self) -> PageFrameNumber;
-}
+use crate::{arch::paging::PageTableSet, mp::CoreLocal};
+
+pub static LOCAL_TABLE: CoreLocal<Once<PageTableSet>> = CoreLocal::new(Once::new());

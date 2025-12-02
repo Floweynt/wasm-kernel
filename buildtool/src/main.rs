@@ -1,25 +1,29 @@
 #![feature(decl_macro)]
+#![feature(coroutines, coroutine_trait, stmt_expr_attributes)]
+#![feature(gen_blocks)]
 
 use anyhow::{Error, Result};
-use cargo_metadata::Message;
+use cargo_metadata::{Message, MetadataCommand};
 use clap::{Parser, Subcommand};
-use elf::ElfBytes;
-use elf::endian::AnyEndian;
+use debug::gen_debug_module;
 use fatfs::{FatType, FileSystem, FormatVolumeOptions, FsOptions, format_volume};
 use fscommon::StreamSlice;
 use gptman::{GPT, GPTPartitionEntry};
 use reqwest::blocking;
-use std::env::current_dir;
-use std::fs::{self, File, create_dir_all, exists, metadata, rename, write};
-use std::io::{BufReader, Write, copy};
+use std::env::{current_dir, current_exe};
+use std::fs::{self, File};
+use std::io::{self, BufReader, Write};
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use tempfile::NamedTempFile;
 use uuid::Uuid;
 
+mod debug;
+
 const LIMINE_URL: &str =
     "https://github.com/limine-bootloader/limine/raw/refs/heads/v10.x-binary/BOOTX64.EFI";
+const OVMF_URL: &str = "https://github.com/osdev0/edk2-ovmf-nightly/releases/download/nightly-20251126T024608Z/ovmf-code-x86_64.fd";
 const LIMINE_CONF: &str = "limine.conf";
 
 #[derive(Parser)]
@@ -51,11 +55,12 @@ enum Commands {
         #[arg(long)]
         release: bool,
     },
+    Clean,
 }
 
 fn cache_dir() -> Result<PathBuf> {
     let root = current_dir()?.join("buildtool-cache");
-    create_dir_all(&root)?;
+    fs::create_dir_all(&root)?;
     Ok(root)
 }
 
@@ -66,7 +71,7 @@ fn resources_dir() -> Result<PathBuf> {
 
 fn run_dir() -> Result<PathBuf> {
     let root = current_dir()?.join("run");
-    create_dir_all(&root)?;
+    fs::create_dir_all(&root)?;
     Ok(root)
 }
 
@@ -78,13 +83,27 @@ fn download_limine() -> Result<PathBuf> {
         let response = blocking::get(LIMINE_URL)?;
         let mut dest = File::create(&limine_path)?;
         let content = response.bytes()?;
-        copy(&mut content.as_ref(), &mut dest)?;
+        io::copy(&mut content.as_ref(), &mut dest)?;
     }
 
     Ok(limine_path)
 }
 
-fn build_kernel(release: bool) -> Result<PathBuf> {
+fn download_ovmf() -> Result<PathBuf> {
+    let root = cache_dir()?;
+    let ovmf_path = root.join("ovmf.fd");
+
+    if !ovmf_path.exists() {
+        let response = blocking::get(OVMF_URL)?;
+        let mut dest = File::create(&ovmf_path)?;
+        let content = response.bytes()?;
+        io::copy(&mut content.as_ref(), &mut dest)?;
+    }
+
+    Ok(ovmf_path)
+}
+
+fn build_kernel(release: bool) -> Result<(PathBuf, Vec<(String, PathBuf)>)> {
     let mut args = vec![
         "build",
         "--message-format=json-render-diagnostics",
@@ -96,6 +115,43 @@ fn build_kernel(release: bool) -> Result<PathBuf> {
     if release {
         args.push("--release");
     }
+
+    let mut crate_paths: Vec<(String, PathBuf)> = MetadataCommand::new()
+        .exec()?
+        .packages
+        .iter()
+        .map(|pkg| {
+            let path = pkg.manifest_path.parent()?;
+            Some((format!("{}@{}", pkg.name, pkg.version), path.into()))
+        })
+        .flatten()
+        .collect();
+
+    let sys_root = PathBuf::from(
+        str::from_utf8(
+            &Command::new("rustc")
+                .arg("--print")
+                .arg("sysroot")
+                .output()?
+                .stdout,
+        )?
+        .trim(),
+    );
+
+    crate_paths.push((
+        "builtin::core".into(),
+        sys_root.join("lib/rustlib/src/rust/library/core"),
+    ));
+
+    crate_paths.push((
+        "builtin::alloc".into(),
+        sys_root.join("lib/rustlib/src/rust/library/alloc"),
+    ));
+
+    crate_paths.push((
+        "builtin::compiler-builtins".into(),
+        sys_root.join("lib/rustlib/src/rust/library/compiler-builtins/compiler-builtins"),
+    ));
 
     let mut cmd = Command::new("cargo")
         .args(args)
@@ -116,14 +172,18 @@ fn build_kernel(release: bool) -> Result<PathBuf> {
             // TODO: check package
             Message::CompilerArtifact(artifact) => {
                 if let Some(executable) = artifact.executable {
-                    println!("kernel binary path: {}", executable);
                     res = Some(PathBuf::from(executable));
                 }
             }
             _ => {}
         }
     }
-    Ok(res.ok_or(Error::msg("failed to locate executable"))?)
+
+    cmd.wait()?;
+
+    let executable = res.ok_or(Error::msg("failed to locate executable"))?;
+    eprintln!("kernel binary path: {}", path_to_string(&executable)?);
+    Ok((executable, crate_paths))
 }
 
 fn path_to_string(path: &PathBuf) -> Result<String> {
@@ -134,46 +194,25 @@ fn path_to_string(path: &PathBuf) -> Result<String> {
         .to_string())
 }
 
-fn split_debug_info(elf: &PathBuf) -> Result<(Vec<u8>, Vec<u8>)> {
+fn split_debug_info(elf: &PathBuf) -> Result<Vec<u8>> {
     let cache = cache_dir()?;
     let tmp_stripped = NamedTempFile::new_in(&cache)?;
-    let tmp_debug = NamedTempFile::new_in(&cache)?;
-
-    let elf_abs = path_to_string(&elf)?;
 
     Command::new("strip")
         .args([
-            elf_abs.clone(),
-            "-o".to_owned(),
+            path_to_string(&elf)?,
+            "-o".into(),
             path_to_string(&tmp_stripped.path().to_path_buf())?,
         ])
         .spawn()?
         .wait()?;
 
-    Command::new("strip")
-        .args([
-            elf_abs,
-            "-o".to_owned(),
-            path_to_string(&tmp_debug.path().to_path_buf())?,
-            "--only-keep-debug".to_owned(),
-        ])
-        .spawn()?
-        .wait()?;
-
-    Ok((fs::read(tmp_stripped)?, fs::read(tmp_debug)?))
+    Ok(fs::read(tmp_stripped)?)
 }
 
-fn gen_debug_module(debug_elf: Vec<u8>) -> Result<Vec<u8>> {
-    let file = ElfBytes::<AnyEndian>::minimal_parse(&debug_elf)?;
+fn build_image(build_res: &(PathBuf, Vec<(String, PathBuf)>), release: bool) -> Result<PathBuf> {
+    let (kernel_elf, package_data) = build_res;
 
-    let table = file.symbol_table()?;
-
-    // TODO: parse symbol table
-
-    todo!()
-}
-
-fn build_image(kernel_elf: &PathBuf, release: bool) -> Result<PathBuf> {
     let cache_dir = cache_dir()?;
     let limine_efi = download_limine()?;
     let limine_cfg = resources_dir()?.join(LIMINE_CONF);
@@ -181,13 +220,18 @@ fn build_image(kernel_elf: &PathBuf, release: bool) -> Result<PathBuf> {
         "kernel-{}.img",
         if release { "release" } else { "debug" }
     ));
+    let debug_mod = cache_dir.join(format!(
+        "kernel-debug_info-{}.mod",
+        if release { "release" } else { "debug" }
+    ));
 
-    if !exists(&output_img)?
-        || metadata(&kernel_elf)?.modified()? > metadata(&output_img)?.modified()?
-        || metadata(&limine_efi)?.modified()? > metadata(&output_img)?.modified()?
-        || metadata(&limine_cfg)?.modified()? > metadata(&output_img)?.modified()?
+    if !fs::exists(&output_img)?
+        || fs::metadata(&kernel_elf)?.modified()? > fs::metadata(&output_img)?.modified()?
+        || fs::metadata(&limine_efi)?.modified()? > fs::metadata(&output_img)?.modified()?
+        || fs::metadata(&limine_cfg)?.modified()? > fs::metadata(&output_img)?.modified()?
+        || fs::metadata(&current_exe()?)?.modified()? > fs::metadata(&output_img)?.modified()?
     {
-        println!(
+        eprintln!(
             "rebuilding image: {}",
             output_img
                 .to_str()
@@ -234,16 +278,25 @@ fn build_image(kernel_elf: &PathBuf, release: bool) -> Result<PathBuf> {
         fs.root_dir().create_dir("efi")?;
         fs.root_dir().create_dir("efi/boot")?;
 
-        copy(
+        io::copy(
             &mut File::open(limine_efi)?,
             &mut fs.root_dir().create_file("efi/boot/bootx64.efi")?,
         )?;
-        copy(
+        io::copy(
             &mut File::open(limine_cfg)?,
             &mut fs.root_dir().create_file(LIMINE_CONF)?,
         )?;
 
-        let (elf_data, debug_data) = split_debug_info(kernel_elf)?;
+        let elf_data = split_debug_info(kernel_elf)?;
+        let debug_data = gen_debug_module(fs::read(kernel_elf)?, package_data)?;
+
+        fs.root_dir()
+            .create_file("kernel_symbols.mod")?
+            .write_all(&debug_data)?;
+
+        fs::write(debug_mod, &debug_data)?;
+
+        eprintln!("kernel.elf is {} bytes", elf_data.len());
 
         fs.root_dir()
             .create_file("kernel.elf")?
@@ -253,14 +306,14 @@ fn build_image(kernel_elf: &PathBuf, release: bool) -> Result<PathBuf> {
 
         output_file.flush()?;
 
-        rename(temp_img_out.path(), &output_img)?;
+        fs::rename(temp_img_out.path(), &output_img)?;
     }
 
     Ok(output_img)
 }
 
 fn exec<T: std::fmt::Debug + AsRef<std::ffi::OsStr>>(command: &str, args: Vec<T>) -> Result<()> {
-    println!("running: {} {:?}", command, args);
+    eprintln!("running: {} {:?}", command, args);
     let err = Command::new(command)
         .args(args)
         .current_dir(run_dir()?)
@@ -272,43 +325,43 @@ fn qemu(kvm: bool, cores: u8, mem_g: u8, release: bool) -> Result<()> {
     let path = build_image(&build_kernel(release)?, release)?;
 
     let mut args = vec![
-        "-bios".to_owned(),
-        path_to_string(&resources_dir()?.join("OVMF.fd"))?,
-        "-hda".to_owned(),
+        "-bios".into(),
+        path_to_string(&download_ovmf()?)?,
+        "-hda".into(),
         path_to_string(&path)?,
-        "-no-reboot".to_owned(),
-        "-monitor".to_owned(),
-        "stdio".to_owned(),
-        "-d".to_owned(),
-        "int,cpu_reset".to_owned(),
-        "-D".to_owned(),
-        "qemu.log".to_owned(),
-        "-no-shutdown".to_owned(),
-        "-s".to_owned(),
-        "-S".to_owned(),
-        "-M".to_owned(),
-        "smm=off".to_owned(),
-        "-m".to_owned(),
-        format!("{}G", mem_g).to_owned(),
-        "-smp".to_owned(),
+        "-no-reboot".into(),
+        "-monitor".into(),
+        "stdio".into(),
+        "-d".into(),
+        "int,cpu_reset".into(),
+        "-D".into(),
+        "qemu.log".into(),
+        "-no-shutdown".into(),
+        "-s".into(),
+        "-S".into(),
+        "-M".into(),
+        "smm=off".into(),
+        "-m".into(),
+        format!("{}G", mem_g).into(),
+        "-smp".into(),
         format!("{}", cores),
-        "-vga".to_owned(),
-        "std".to_owned(),
-        "-serial".to_owned(),
+        "-vga".into(),
+        "std".into(),
+        "-serial".into(),
         format!("file:{}/serial.txt", path_to_string(&run_dir()?)?),
     ];
 
     if kvm {
-        args.push("-enable-kvm".to_owned());
-        args.push("-cpu".to_owned());
-        args.push("host".to_owned());
+        args.push("-enable-kvm".into());
+        args.push("-cpu".into());
+        args.push("host".into());
     }
 
     exec("qemu-system-x86_64", args)
 }
 
 fn gdb(kvm: bool, release: bool) -> Result<()> {
-    let kernel_elf = build_kernel(release)?;
+    let (kernel_elf, _) = build_kernel(release)?;
 
     let gdb_args;
 
@@ -318,19 +371,14 @@ fn gdb(kvm: bool, release: bool) -> Result<()> {
         gdb_args = vec!["target remote localhost:1234", "b kmain", "c"]
     }
 
-    let kernel_elf_abs = kernel_elf.canonicalize()?;
-    let file = kernel_elf_abs
-        .to_str()
-        .ok_or(Error::msg("bad kernel elf path"))?;
-
     let mut args = vec![path_to_string(&kernel_elf)?];
 
     for ent in gdb_args {
-        args.push("-ex".to_owned());
-        args.push(ent.to_owned());
+        args.push("-ex".into());
+        args.push(ent.into());
     }
 
-    exec("gdb", args)
+    exec("rust-gdb", args)
 }
 
 fn main() -> Result<()> {
@@ -347,6 +395,10 @@ fn main() -> Result<()> {
             release,
         } => qemu(kvm, cores, mem, release)?,
         Commands::Gdb { kvm, release } => gdb(kvm, release)?,
+        Commands::Clean => {
+            fs::remove_dir_all(cache_dir()?)?;
+            cache_dir()?;
+        }
     }
 
     Ok(())

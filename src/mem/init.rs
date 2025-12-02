@@ -1,98 +1,107 @@
-use core::ptr::addr_eq;
-
 use super::{
     ByteSize, MemoryMapType, MemoryMapView, PageFrameAllocator, PageFrameNumber, PageSize,
     PhysicalAddress, VARange, VirtualAddress, VirtualPageFrameNumber, Wrapper, page_info,
-    vpa::{AddressSpace, TreeVirtualAllocator, VirtualAllocator},
+    vpa::{EarlyAllocator, VirtualAllocator},
 };
 use crate::{
     arch::paging::{PageFlags, PageTableSet, get_higher_half_addr},
+    log::ansi::{ANSIFormatter, Color},
     mem::{
         AddressRange, MEMORY_MAP_REQUEST, VFRange, get_hhdm_start, get_kernel_physical_base,
-        get_kernel_virtual_base, init_malloc, init_pdt, vpa::EarlyVirtualAllocator,
+        get_kernel_virtual_base, init_pdt, malloc::init_malloc, vpa,
     },
-    tty::{blue, green, println, red, yellow},
 };
+use core::{cell::RefCell, ffi::c_void};
 use limine::{memory_map::EntryType, response::MemoryMapResponse};
+use log::info;
 use spin::Once;
 
 unsafe extern "C" {
-    static _marker_kernel_start: u8;
-    static _marker_limine_request_start: u8;
-    static _marker_limine_request_end: u8;
-    static _marker_text_start: u8;
-    static _marker_text_end: u8;
-    static _marker_rodata_start: u8;
-    static _marker_rodata_end: u8;
-    static _marker_data_start: u8;
-    static _marker_data_end: u8;
-    static _marker_kernel_end: u8;
+    static _marker_kernel_start: c_void;
+    static _marker_limine_request_start: c_void;
+    static _marker_limine_request_end: c_void;
+    static _marker_text_start: c_void;
+    static _marker_text_end: c_void;
+    static _marker_rodata_start: c_void;
+    static _marker_rodata_end: c_void;
+    static _marker_data_start: c_void;
+    static _marker_data_end: c_void;
+    static _marker_kernel_end: c_void;
 }
 
-pub(super) struct EarlyPMM {
+struct EarlyPMMInner {
     index: usize,
     offset: PageSize,
     is_frozen: bool,
 }
 
+pub(super) struct EarlyPMM {
+    data: RefCell<EarlyPMMInner>,
+}
+
 impl PageFrameAllocator for EarlyPMM {
-    fn allocate_single_page(&mut self) -> PageFrameNumber {
-        assert!(!self.is_frozen);
+    fn allocate_single_page(&self) -> PageFrameNumber {
+        let mut state = self.data.borrow_mut();
+
+        assert!(state.is_frozen);
 
         let entries = MemoryMapView::get();
 
         loop {
-            if self.offset < entries.at(self.index).size
-                && entries.at(self.index).entry_type == MemoryMapType::Usable
+            if state.offset < entries.at(state.index).size
+                && entries.at(state.index).entry_type == MemoryMapType::Usable
             {
                 break;
             }
 
-            self.index += 1;
-            self.offset = PageSize::new(0u64);
+            state.index += 1;
+            state.offset = PageSize::new(0u64);
 
-            if self.index >= entries.len() {
+            if state.index >= entries.len() {
                 panic!("EarlyPMM::allocate_page(): out-of-memory")
             }
         }
 
-        let pos = entries.at(self.index).start + self.offset;
-        self.offset += PageSize::new(1u64);
+        let pos = entries.at(state.index).start + state.offset;
+        state.offset += PageSize::new(1u64);
         pos
     }
 }
 
 impl EarlyPMM {
-    pub(super) fn freeze(&mut self) {
+    pub(super) fn freeze(&self) {
         #[cfg(debug_assertions)]
         {
-            self.is_frozen = true;
+            self.data.borrow_mut().is_frozen = true;
         }
     }
 
-    pub(super) fn is_used(&mut self, index: usize, offset: PageSize) -> bool {
-        index < self.index || (index == self.index && offset < self.offset)
+    pub(super) fn is_used(&self, index: usize, offset: PageSize) -> bool {
+        let state = self.data.borrow();
+        index < state.index || (index == state.index && offset < state.offset)
     }
 }
 
 pub fn dump_memory_info() {
     let mem_map = MEMORY_MAP_REQUEST.get_response().unwrap();
 
-    println!("memory map: ");
+    info!("memory map: ");
     for entries in mem_map.entries() {
-        println!(
-            "[{}] {:#016x}-{:#016x} len = {:#x}",
-            match entries.entry_type {
-                EntryType::USABLE => green!("usable      "),
-                EntryType::RESERVED => red!("reserved    "),
-                EntryType::ACPI_RECLAIMABLE => yellow!("ACPI reclaim"),
-                EntryType::ACPI_NVS => blue!("ACPI NVS    "),
-                EntryType::BAD_MEMORY => red!("bad         "),
-                EntryType::BOOTLOADER_RECLAIMABLE => yellow!("bootloader  "),
-                EntryType::EXECUTABLE_AND_MODULES => blue!("kernel      "),
-                EntryType::FRAMEBUFFER => blue!("framebuffer "),
-                _ => red!("unknown     "),
-            },
+        let (str, color) = match entries.entry_type {
+            EntryType::USABLE => (&"usable", Color::GREEN),
+            EntryType::RESERVED => (&"reserved", Color::RED),
+            EntryType::ACPI_RECLAIMABLE => (&"ACPI reclaim", Color::YELLOW),
+            EntryType::ACPI_NVS => (&"ACPI NVS", Color::BLUE),
+            EntryType::BAD_MEMORY => (&"bad", Color::RED),
+            EntryType::BOOTLOADER_RECLAIMABLE => (&"bootloader", Color::YELLOW),
+            EntryType::EXECUTABLE_AND_MODULES => (&"kernel", Color::CYAN),
+            EntryType::FRAMEBUFFER => (&"framebuffer", Color::BLUE),
+            _ => (&"unknown", Color::RED),
+        };
+
+        info!(
+            "[{:12 }] {:#016x}-{:#016x} len = {:#x}",
+            ANSIFormatter::new(str).color(color),
             entries.base,
             entries.base + entries.length,
             entries.length
@@ -116,19 +125,12 @@ pub(super) struct VirtualMemoryLayout {
 
 pub(super) static VM_LAYOUT: Once<VirtualMemoryLayout> = Once::new();
 
-fn allocate_padded(
-    alloc: &mut EarlyVirtualAllocator,
-    size: PageSize,
-    padding: PageSize,
-) -> Option<VFRange> {
-    alloc
-        .allocate(padding + size + padding)
-        .map(|f| VFRange::new(f + padding, f + padding + size))
-}
-
 fn init_vm_layout(
     memory_map: &MemoryMapResponse,
-) -> (&'static VirtualMemoryLayout, EarlyVirtualAllocator) {
+) -> (
+    &'static VirtualMemoryLayout,
+    VirtualAllocator<EarlyAllocator>,
+) {
     let max_addr = memory_map
         .entries()
         .iter()
@@ -147,29 +149,33 @@ fn init_vm_layout(
         + (VirtualAddress::from(&raw const _marker_kernel_end)
             - VirtualAddress::from(&raw const _marker_kernel_start));
 
-    let mut allocator = EarlyVirtualAllocator::new(
-        get_higher_half_addr().frame_aligned(),
-        get_kernel_virtual_base().frame_aligned(),
-    );
-
-    allocator
-        .reserve_range(VFRange::new(
+    let allocator = VirtualAllocator::early(
+        VFRange::new(
+            get_higher_half_addr().frame_aligned(),
+            get_kernel_virtual_base().frame_aligned(),
+        ),
+        &[VFRange::new(
             hhdm_base.frame_aligned() - padding,
             hhdm_end.frame_aligned() + padding,
-        ))
-        .expect("mem::init_vm_layout(): failed to reserve range for HHDM");
+        )],
+    )
+    .expect("mem::init_vm_layout(): failed to reserve range for HHDM");
 
     let pdt_size =
         (ByteSize::size_of::<page_info::PageState>() * hhdm_size.value()).page_size_roundup();
 
     let heap_size = PageSize::new(1 << 28);
 
-    let (pdt_base, pdt_end) = allocate_padded(&mut allocator, pdt_size, padding)
+    let (pdt_base, pdt_end) = allocator
+        .allocate_padded(pdt_size, padding)
         .expect("mem::init_vm_layout(): failed to allocate memory for physical page desc table")
+        .leak()
         .tup();
 
-    let (heap_base, heap_end) = allocate_padded(&mut allocator, heap_size, padding)
+    let (heap_base, heap_end) = allocator
+        .allocate_padded(heap_size, padding)
         .expect("mem::init_vm_layout(): failed to allocate memory for heap")
+        .leak()
         .tup();
 
     let layout = VM_LAYOUT.call_once(|| VirtualMemoryLayout {
@@ -190,7 +196,7 @@ fn init_vm_layout(
 }
 
 fn map_kernel_segment(
-    pmm: &mut EarlyPMM,
+    pmm: &EarlyPMM,
     address_space: &mut PageTableSet,
     layout: &VirtualMemoryLayout,
     range: VARange,
@@ -209,7 +215,7 @@ fn map_kernel_segment(
     );
 }
 
-fn transition_paging(pmm: &mut EarlyPMM, layout: &VirtualMemoryLayout, space: &mut PageTableSet) {
+fn transition_paging(pmm: &EarlyPMM, layout: &VirtualMemoryLayout, space: &mut PageTableSet) {
     for entry in MemoryMapView::get().iter() {
         if let Some(traits) = match entry.entry_type {
             MemoryMapType::Usable
@@ -241,11 +247,11 @@ fn transition_paging(pmm: &mut EarlyPMM, layout: &VirtualMemoryLayout, space: &m
     let data_start = VirtualAddress::from(&raw const _marker_data_start);
     let data_end = VirtualAddress::from(&raw const _marker_data_end);
 
-    println!("mem::transition_paging(): kernel segment layout:");
-    println!("  limine_requests r-- {}-{}", limine_start, limine_end);
-    println!("  text            r-x {}-{}", text_start, text_end);
-    println!("  rodata          r-- {}-{}", rodata_start, rodata_end);
-    println!("  data            rw- {}-{}", data_start, data_end);
+    info!("mem::transition_paging(): kernel segment layout:");
+    info!("  limine_requests r-- {}-{}", limine_start, limine_end);
+    info!("  text            r-x {}-{}", text_start, text_end);
+    info!("  rodata          r-- {}-{}", rodata_start, rodata_end);
+    info!("  data            rw- {}-{}", data_start, data_end);
 
     map_kernel_segment(
         pmm,
@@ -279,58 +285,59 @@ fn transition_paging(pmm: &mut EarlyPMM, layout: &VirtualMemoryLayout, space: &m
         PageFlags::KERNEL_RW,
     );
 
-    println!("mem::transition_paging(): preparing to switch pt...");
+    info!("mem::transition_paging(): preparing to switch pt...");
 
     unsafe {
         space.set_current();
     }
 
-    println!("mem::transition_paging(): done switch pt");
+    // make sure that the first-level page tables are allocated
+    // this is important because it means that all separate cores will share these tables
+    space.map_kernel_pages(pmm);
+
+    info!("mem::transition_paging(): done switch pt");
 }
 
-pub fn init() -> AddressSpace<TreeVirtualAllocator> {
+pub fn init() -> PageTableSet {
     let memory_map = MEMORY_MAP_REQUEST
         .get_response()
         .expect("memory map not present");
 
     let (layout, early_allocator) = init_vm_layout(memory_map);
 
-    println!("mem::init(): VM layout:");
-    println!("  base: {}", layout.higher_half_base);
-    println!(
+    info!("mem::init(): VM layout:");
+    info!("  base: {}", layout.higher_half_base);
+    info!(
         "  HHDM: {}-{} ({} pages)",
         layout.hhdm_base, layout.hhdm_end, layout.hhdm_size
     );
-    println!("  PDT: {}-{}", layout.pdt_base, layout.pdt_end);
-    println!(
+    info!("  PDT: {}-{}", layout.pdt_base, layout.pdt_end);
+    info!(
         "  heap: {}-{}",
         layout.heap_base.address(),
         layout.heap_end.address()
     );
-    println!(
+    info!(
         "  kernel: {}-{} -> phys:{}",
         layout.kernel_base, layout.kernel_end, layout.kernel_phys_base
     );
 
-    /* TODO check HHDM align
-    if layout.hhdm_base != 0 {
-        panic!("hhdm is not aligned");
-    }*/
-
-    let mut early_pmm = EarlyPMM {
-        index: 0,
-        offset: PageSize::new(0u64),
-        is_frozen: false,
+    let early_pmm = EarlyPMM {
+        data: RefCell::new(EarlyPMMInner {
+            index: 0,
+            offset: PageSize::new(0),
+            is_frozen: false,
+        }),
     };
 
     // transition over to our own memory mapping scheme
 
-    let mut root_space = PageTableSet::new::<EarlyPMM>(&mut early_pmm);
+    let mut root_space = PageTableSet::new::<EarlyPMM>(&early_pmm);
 
-    transition_paging(&mut early_pmm, &layout, &mut root_space);
+    transition_paging(&early_pmm, &layout, &mut root_space);
 
     init_pdt(
-        &mut early_pmm,
+        &early_pmm,
         &mut root_space,
         layout.pdt_base,
         layout.hhdm_size,
@@ -338,10 +345,7 @@ pub fn init() -> AddressSpace<TreeVirtualAllocator> {
 
     init_malloc(VFRange::new(layout.heap_base, layout.heap_end), root_space);
 
-    let tree_allocator = TreeVirtualAllocator::new(early_allocator);
+    vpa::initialize(VirtualAllocator::tree(early_allocator));
 
-    AddressSpace {
-        virtual_alloc: tree_allocator,
-        tables: root_space,
-    }
+    root_space
 }

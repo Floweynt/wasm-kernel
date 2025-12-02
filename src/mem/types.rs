@@ -1,14 +1,15 @@
 use crate::{
-    arch::{PAGE_SMALL_SIZE, SMALL_PAGE_PAGE_SIZE},
+    arch::{PAGE_SMALL_SIZE, SMALL_PAGE_PAGE_SIZE, paging::get_higher_half_addr},
     mem::VM_LAYOUT,
 };
 use core::{
     iter::Step,
-    ops::{Add, AddAssign, Sub, SubAssign},
+    ops::{Add, AddAssign, Range, Sub, SubAssign},
 };
 use derive_more::{Add, AddAssign, Constructor, Debug, Display, Mul, SubAssign};
 
-pub trait Wrapper<T> {
+pub trait Wrapper<T: Step>: Copy {
+    fn new(inst: T) -> Self;
     fn value(self) -> T;
 }
 
@@ -123,45 +124,20 @@ pub struct PageDiff(i64);
 // size helpers
 
 pub trait SizeType {
-    fn size(self) -> u64;
+    fn size_bytes(self) -> u64;
 }
 
 impl SizeType for PageSize {
-    fn size(self) -> u64 {
+    fn size_bytes(self) -> u64 {
         self.0 * PAGE_SMALL_SIZE
     }
 }
 
 impl SizeType for ByteSize {
-    fn size(self) -> u64 {
+    fn size_bytes(self) -> u64 {
         self.0
     }
 }
-
-// step
-macro impl_step($type:ident) {
-    impl Step for $type {
-        fn steps_between(start: &Self, end: &Self) -> (usize, Option<usize>) {
-            if start.0 > end.0 {
-                (0, None)
-            } else {
-                let val = (end.0 - start.0) as usize;
-                (val, Some(val))
-            }
-        }
-
-        fn forward_checked(start: Self, count: usize) -> Option<Self> {
-            start.0.checked_add(count as u64).map(|f| Self(f))
-        }
-
-        fn backward_checked(start: Self, count: usize) -> Option<Self> {
-            start.0.checked_sub(count as u64).map(|f| Self(f))
-        }
-    }
-}
-
-impl_step!(ByteSize);
-impl_step!(PageSize);
 
 // implementations
 
@@ -181,8 +157,26 @@ macro impl_assign($type:ident, $delta:ident) {
 
 macro impl_value($type:ident, $value:ident) {
     impl Wrapper<$value> for $type {
+        fn new(value: $value) -> Self {
+            Self(value)
+        }
+
         fn value(self) -> $value {
             self.0
+        }
+    }
+
+    impl Step for $type {
+        fn steps_between(start: &Self, end: &Self) -> (usize, Option<usize>) {
+            Step::steps_between(&start.value(), &end.value())
+        }
+
+        fn forward_checked(start: Self, count: usize) -> Option<Self> {
+            Some(Self::new(Step::forward_checked(start.value(), count)?))
+        }
+
+        fn backward_checked(start: Self, count: usize) -> Option<Self> {
+            Some(Self::new(Step::backward_checked(start.value(), count)?))
         }
     }
 }
@@ -351,6 +345,10 @@ impl VirtualAddress {
         layout.kernel_phys_base + (self - layout.kernel_base)
     }
 
+    pub fn is_higher_half(self) -> bool {
+        self > get_higher_half_addr()
+    }
+
     pub fn frame_containing(self) -> VirtualPageFrameNumber {
         VirtualPageFrameNumber(self.0 / PAGE_SMALL_SIZE)
     }
@@ -369,7 +367,7 @@ impl VirtualAddress {
     }
 
     pub fn is_aligned<T: SizeType>(self, size: T) -> bool {
-        self.0 % size.size() == 0
+        self.0 % size.size_bytes() == 0
     }
 }
 
@@ -397,7 +395,7 @@ impl PhysicalAddress {
     }
 
     pub fn is_aligned<T: SizeType>(self, size: T) -> bool {
-        self.0 % size.size() == 0
+        self.0 % size.size_bytes() == 0
     }
 }
 
@@ -420,6 +418,10 @@ impl VirtualPageFrameNumber {
         VirtualAddress(self.0.checked_mul(PAGE_SMALL_SIZE).expect(""))
     }
 
+    pub fn is_higher_half(self) -> bool {
+        self.address().is_higher_half()
+    }
+
     pub fn as_ptr<T>(self) -> *const T {
         self.address().as_ptr()
     }
@@ -433,8 +435,21 @@ impl VirtualPageFrameNumber {
     }
 }
 
-pub trait AddressRange<D, A: Sub<A, Output = D> + PartialOrd, S: From<D>>: Sized + Copy {
+pub trait AddressRange<
+    D,
+    A: Sub<A, Output = D> + PartialOrd + Add<S, Output = A> + Copy + Wrapper<u64>,
+    S: From<D>,
+>: Sized + Copy
+{
+    fn as_rust_range(self) -> Range<A> {
+        self.start()..self.end()
+    }
+
     fn new(min: A, max: A) -> Self;
+
+    fn sized(base: A, size: S) -> Self {
+        Self::new(base, base + size)
+    }
 
     fn start(&self) -> A;
 
@@ -498,5 +513,11 @@ impl AddressRange<PageDiff, VirtualPageFrameNumber, PageSize> for VFRange {
 
     fn end(&self) -> VirtualPageFrameNumber {
         self.1
+    }
+}
+
+impl VFRange {
+    pub fn as_va_range(self) -> VARange {
+        VARange(self.0.address(), self.1.address())
     }
 }

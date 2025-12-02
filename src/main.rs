@@ -8,27 +8,40 @@
 #![feature(assert_matches)]
 #![feature(step_trait)]
 #![feature(iter_map_windows)]
+#![feature(unsafe_cell_access)]
+#![feature(associated_type_defaults)]
+#![feature(const_ops)]
+#![feature(generic_atomic)]
+#![feature(const_default)]
+#![allow(incomplete_features)]
+#![feature(generic_const_exprs)]
 
 mod arch;
 mod cmdline;
+mod log;
 mod mem;
 mod mp;
-mod tty;
 
-use arch::{SerialTTY, UnwindContext, halt, initialize_core};
-use core::cell::UnsafeCell;
+use ::log::{info, warn};
+use arch::mp::initialize_mp;
+use cmdline::{get_cmdline_error, get_cmdline_text, parse_kernel_cmdline};
 use limine::BaseRevision;
 use limine::firmware_type::FirmwareType;
 use limine::request::{
-    BootloaderInfoRequest, ExecutableCmdlineRequest, FirmwareTypeRequest, FramebufferRequest,
-    ModuleRequest, MpRequest, RequestsEndMarker, RequestsStartMarker, RsdpRequest, SmbiosRequest,
+    BootloaderInfoRequest, FirmwareTypeRequest, RequestsEndMarker, RequestsStartMarker,
+    RsdpRequest, SmbiosRequest, StackSizeRequest,
 };
-use static_cell::StaticCell;
-use tty::{FlanTermTTY, MultiTTY, dump_stack, print_grouped, println};
+use log::init_tty;
+use log::options::LogSource;
 
 #[used]
 #[unsafe(link_section = ".limine_requests")]
 static BASE_REVISION: BaseRevision = BaseRevision::with_revision(4);
+
+// 8MB stack
+#[used]
+#[unsafe(link_section = ".limine_requests")]
+static STACK_SIZE_REQUEST: StackSizeRequest = StackSizeRequest::new().with_size(8 * 1024 * 1024);
 
 #[used]
 #[unsafe(link_section = ".limine_requests")]
@@ -36,23 +49,7 @@ static BOOTLOADER_INFO_REQUEST: BootloaderInfoRequest = BootloaderInfoRequest::n
 
 #[used]
 #[unsafe(link_section = ".limine_requests")]
-static CMDLINE_REQUEST: ExecutableCmdlineRequest = ExecutableCmdlineRequest::new();
-
-#[used]
-#[unsafe(link_section = ".limine_requests")]
 static FIRMWARE_TYPE_REQUEST: FirmwareTypeRequest = FirmwareTypeRequest::new();
-
-#[used]
-#[unsafe(link_section = ".limine_requests")]
-static FRAMEBUFFER_REQUEST: FramebufferRequest = FramebufferRequest::new();
-
-#[used]
-#[unsafe(link_section = ".limine_requests")]
-static MP_REQUEST: MpRequest = MpRequest::new();
-
-#[used]
-#[unsafe(link_section = ".limine_requests")]
-static MODULE_REQUEST: ModuleRequest = ModuleRequest::new();
 
 #[used]
 #[unsafe(link_section = ".limine_requests")]
@@ -70,22 +67,29 @@ static _START_MARKER: RequestsStartMarker = RequestsStartMarker::new();
 #[unsafe(link_section = ".limine_requests_end")]
 static _END_MARKER: RequestsEndMarker = RequestsEndMarker::new();
 
-static FLANTERM_TTY: StaticCell<UnsafeCell<FlanTermTTY>> = StaticCell::new();
-static SERIAL_TTY: StaticCell<UnsafeCell<SerialTTY>> = StaticCell::new();
-static DUAL_FLANTERM_TTY: StaticCell<UnsafeCell<MultiTTY>> = StaticCell::new();
-
 fn dump_boot_info() {
     if let Some(res) = BOOTLOADER_INFO_REQUEST.get_response() {
-        println!("kmain(): bootloader: {} v{}", res.name(), res.version());
+        info!(target: "init::limine", "bootloader: {} v{}", res.name(), res.version());
     }
 
-    if let Some(res) = CMDLINE_REQUEST.get_response() {
-        println!("kmain(): cmdline: \"{}\"", res.cmdline().to_str().unwrap());
+    if let Some(res) = get_cmdline_text() {
+        info!(target: "limine", "cmdline: \"{}\"", res);
+    }
+
+    if let Some(err) = get_cmdline_error() {
+        match err {
+            cmdline::CmdlineError::NoResponse => warn!("no response received for cmdline request"),
+            cmdline::CmdlineError::Utf8Error(err) => {
+                warn!("failed to convert cmdline to utf8: {}", err)
+            }
+            cmdline::CmdlineError::ParseError(err) => warn!("failed to parse cmdline: {}", err),
+        }
     }
 
     if let Some(res) = FIRMWARE_TYPE_REQUEST.get_response() {
-        println!(
-            "kmain(): firmware: {}",
+        info!(
+            target: "init",
+            "firmware: {}",
             match res.firmware_type() {
                 FirmwareType::X86_BIOS => "bios",
                 FirmwareType::UEFI_32 => "efi_32",
@@ -99,68 +103,39 @@ fn dump_boot_info() {
     mem::dump_memory_info();
 }
 
-fn init_tty() {
-    let serial_tty = SERIAL_TTY
-        .init(UnsafeCell::new(SerialTTY::open(0x3f8)))
-        .get_mut();
-
-    let fb = &FRAMEBUFFER_REQUEST
-        .get_response()
-        .unwrap()
-        .framebuffers()
-        .next()
-        .unwrap();
-
-    let flanterm_tty = FLANTERM_TTY
-        .init(UnsafeCell::new(FlanTermTTY::from_framebuffer(fb)))
-        .get_mut();
-
-    tty::set_handler(
-        DUAL_FLANTERM_TTY
-            .init(UnsafeCell::new(MultiTTY::new(serial_tty, flanterm_tty)))
-            .get_mut(),
-    );
-
-    println!("kmain(): tty initialized");
-    println!("kmain(): framebuffer: {}x{}", fb.width(), fb.height());
-}
-
 #[unsafe(no_mangle)]
 unsafe extern "C" fn kmain() -> ! {
+    parse_kernel_cmdline();
     init_tty();
     dump_boot_info();
-    mem::init();
 
-    /*
-    if let Some(mp) = MP_REQUEST.get_response() {
-        for ele in mp.cpus() {}
-    }*/
+    let addr_space = mem::init();
 
-    // test some cursed stuff
-
-    initialize_core(0);
-
-    halt();
+    initialize_mp(&addr_space);
 }
 
+#[cfg(not(test))]
 #[panic_handler]
 fn rust_panic(info: &core::panic::PanicInfo) -> ! {
-    print_grouped(|mut printer| {
-        printer.println(format_args!("panic: {}", info.message()));
-        match info.location() {
-            Some(location) => printer.println(format_args!(
-                "at {}:{}:{}",
-                location.file(),
-                location.line(),
-                location.column()
-            )),
-            None => printer.println(format_args!("at unknown location")),
-        };
+    use ::log::error;
+    use arch::halt;
+    use log::StackTrace;
 
-        unsafe {
-            dump_stack(&mut printer.writer(), UnwindContext::get());
-        }
-    });
+    match info.location() {
+        Some(location) => error!(
+            "panic: {}\nat {}:{}:{}\n{}",
+            info.message(),
+            location.file(),
+            location.line(),
+            location.column(),
+            StackTrace::current()
+        ),
+        None => error!(
+            "panic: {}\nat unknown location\n{}",
+            info.message(),
+            StackTrace::current()
+        ),
+    };
 
     halt()
 }

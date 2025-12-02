@@ -15,36 +15,40 @@ SECTIONS
     . = 0xffffffff80000000;
     
     _marker_kernel_start = .;
-    _marker_limine_request_start = .;
 
+    /* limine */
+
+    _marker_limine_request_start = .;
     .limine_requests : {
         KEEP(*(.limine_requests_start))
         KEEP(*(.limine_requests))
         KEEP(*(.limine_requests_end))
     } :limine_requests
-
     _marker_limine_request_end = .;
 
     . = ALIGN(CONSTANT(MAXPAGESIZE));
 
-    _marker_text_start = .;
+    /* .text */
 
+    _marker_text_start = .;
     .text :
     {
         *(.text .text.*)
     } :text
-    
     _marker_text_end = .;
  
     . = ALIGN(CONSTANT(MAXPAGESIZE));
 
-    _marker_rodata_start = .;
+    /* rodata */
 
+    _marker_rodata_start = .;
     .rodata : 
     {
         *(.rodata .rodata.*)
     } :rodata
 
+    /* got */
+    
     _marker_got_start = .;
     .got :
     {
@@ -52,8 +56,25 @@ SECTIONS
     } :rodata
     _marker_got_end = .;
 
+    /* cpu local template */
+
+    _marker_cpu_local_template_start = .;
+
+    . = ALIGN(CONSTANT(MAXPAGESIZE));
+
+    .cpu_local_template : 
+    {
+        *(.cpu_local)
+    } :rodata
+
+    . = ALIGN(CONSTANT(MAXPAGESIZE));
+
+    _marker_cpu_local_template_end = .;
+
     _marker_rodata_end = .;
  
+    /* data */
+
     . = ALIGN(CONSTANT(MAXPAGESIZE));
 
     _marker_data_start = .;
@@ -62,13 +83,13 @@ SECTIONS
     {
         *(.data .data.*)
     } :data
- 
+
     .bss : 
     {
         *(COMMON)
         *(.bss .bss.*)
     } :data
-
+    
     _marker_data_end = .;
     _marker_kernel_end = .;
 
