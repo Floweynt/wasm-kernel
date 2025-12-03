@@ -6,8 +6,8 @@ use log::info;
 struct InterruptContext {
     regs: [u64; 14],
 
-    err: u64,
     id: u64,
+    err: u64,
 
     rip: u64,
     cs: u64,
@@ -16,7 +16,7 @@ struct InterruptContext {
     ss: u64,
 }
 
-const fn has_error_code(int_no: u8) -> u64 {
+const fn error_code_offset(int_no: u8) -> u64 {
     if int_no == 8 || (10..=14).contains(&int_no) || int_no == 17 || int_no == 21 {
         0
     } else {
@@ -31,9 +31,20 @@ pub unsafe extern "C" fn irq_handler_entry<const I: u8>() -> ! {
         "cld",
 
         // normalize the stack frame: [int#, ec]
-        "pushq ${}",
         "subq ${}, %rsp",
+        "pushq ${}",
+        "jmp {}",
 
+        options(att_syntax),
+        const error_code_offset(I),
+        const I,
+        sym irq_handler_t0
+    )
+}
+
+#[unsafe(naked)]
+pub unsafe extern "C" fn irq_handler_t0() -> ! {
+    naked_asm!(
         "pushq %rax",
         "pushq %rcx",
         "pushq %rdx",
@@ -58,7 +69,6 @@ pub unsafe extern "C" fn irq_handler_entry<const I: u8>() -> ! {
         "movq %rsp, %rbp",
 
         // align stack
-        "addq $8, %rsp",
         "andq $~15, %rsp",
 
         // invoke
@@ -66,8 +76,7 @@ pub unsafe extern "C" fn irq_handler_entry<const I: u8>() -> ! {
 
         "movq %rbp, %rsp",
         "popq %rbp",
-
-        "addq $16, %rsp",
+        "addq $8, %rsp",
 
         "popq %r15",
         "popq %r14",
@@ -86,13 +95,12 @@ pub unsafe extern "C" fn irq_handler_entry<const I: u8>() -> ! {
 
         "addq $16, %rsp",
         "iretq",
-        const I,
-        const has_error_code(I),
-        sym irq_handler_trampoline
+        options(att_syntax),
+        sym irq_handler_t1
     );
 }
 
-unsafe extern "C" fn irq_handler_trampoline(addr: *mut InterruptContext) {
+unsafe extern "C" fn irq_handler_t1(addr: *mut InterruptContext) {
     let mut context = unsafe { &*addr };
-    info!("hi!");
+    info!("hi: {} #{}", context.err, context.id);
 }

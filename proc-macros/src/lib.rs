@@ -198,7 +198,7 @@ fn handle_enum(variants: &Punctuated<Variant, Token![,]>) -> TokenStream {
 
                     quote! { #(#initializers;)* }
                 }
-                Fields::Unnamed(fields_unnamed) => todo!(),
+                Fields::Unnamed(_fields_unnamed) => todo!(),
                 Fields::Unit => quote! {},
             };
 
@@ -214,7 +214,7 @@ fn handle_enum(variants: &Punctuated<Variant, Token![,]>) -> TokenStream {
 
                     quote! { Self::#enum_name_ident { #(#initializers,)* } }
                 }
-                Fields::Unnamed(fields_unnamed) => todo!(),
+                Fields::Unnamed(_fields_unnamed) => todo!(),
                 Fields::Unit => quote! { Self::#enum_name_ident },
             };
 

@@ -43,7 +43,7 @@ impl PageFrameAllocator for EarlyPMM {
     fn allocate_single_page(&self) -> PageFrameNumber {
         let mut state = self.data.borrow_mut();
 
-        assert!(state.is_frozen);
+        assert!(!state.is_frozen);
 
         let entries = MemoryMapView::get();
 
@@ -88,20 +88,20 @@ pub fn dump_memory_info() {
     info!("memory map: ");
     for entries in mem_map.entries() {
         let (str, color) = match entries.entry_type {
-            EntryType::USABLE => (&"usable", Color::GREEN),
-            EntryType::RESERVED => (&"reserved", Color::RED),
-            EntryType::ACPI_RECLAIMABLE => (&"ACPI reclaim", Color::YELLOW),
-            EntryType::ACPI_NVS => (&"ACPI NVS", Color::BLUE),
-            EntryType::BAD_MEMORY => (&"bad", Color::RED),
-            EntryType::BOOTLOADER_RECLAIMABLE => (&"bootloader", Color::YELLOW),
-            EntryType::EXECUTABLE_AND_MODULES => (&"kernel", Color::CYAN),
-            EntryType::FRAMEBUFFER => (&"framebuffer", Color::BLUE),
-            _ => (&"unknown", Color::RED),
+            EntryType::USABLE => ("usable", Color::GREEN),
+            EntryType::RESERVED => ("reserved", Color::RED),
+            EntryType::ACPI_RECLAIMABLE => ("ACPI reclaim", Color::YELLOW),
+            EntryType::ACPI_NVS => ("ACPI NVS", Color::BLUE),
+            EntryType::BAD_MEMORY => ("bad", Color::RED),
+            EntryType::BOOTLOADER_RECLAIMABLE => ("bootloader", Color::YELLOW),
+            EntryType::EXECUTABLE_AND_MODULES => ("kernel", Color::CYAN),
+            EntryType::FRAMEBUFFER => ("framebuffer", Color::BLUE),
+            _ => ("unknown", Color::RED),
         };
 
         info!(
             "[{:12 }] {:#016x}-{:#016x} len = {:#x}",
-            ANSIFormatter::new(str).color(color),
+            ANSIFormatter::new(&str).color(color),
             entries.base,
             entries.base + entries.length,
             entries.length

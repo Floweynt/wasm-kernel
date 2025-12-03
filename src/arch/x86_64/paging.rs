@@ -146,7 +146,7 @@ impl PageTableSet {
 
     fn do_action<T: FnOnce() -> ()>(needs_lock: bool, action: T) {
         if needs_lock {
-            let _ = KERNEL_GLOBAL_PAGE_LOCK.lock();
+            let _lock = KERNEL_GLOBAL_PAGE_LOCK.lock();
             action();
         } else {
             action();

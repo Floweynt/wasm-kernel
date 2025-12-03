@@ -11,6 +11,8 @@ pub use requests::*;
 use spin::Once;
 pub use types::*;
 
-use crate::{arch::paging::PageTableSet, mp::CoreLocal};
+use crate::{arch::paging::PageTableSet, mp::core_local};
 
-pub static LOCAL_TABLE: CoreLocal<Once<PageTableSet>> = CoreLocal::new(Once::new());
+core_local! {
+    pub LOCAL_PAGE_TABLE: Once<PageTableSet> = Once::new();
+}

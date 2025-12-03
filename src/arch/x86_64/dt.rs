@@ -16,17 +16,17 @@ use x86::{
 #[derive(Default)]
 pub(super) struct InterruptStackTable {
     pub reserved0: u32,
-    pub rsp0: usize,
-    pub rsp1: usize,
-    pub rsp2: usize,
+    pub rsp0: u64,
+    pub rsp1: u64,
+    pub rsp2: u64,
     pub reserved1: u64,
-    pub ist1: usize,
-    pub ist2: usize,
-    pub ist3: usize,
-    pub ist4: usize,
-    pub ist5: usize,
-    pub ist6: usize,
-    pub ist7: usize,
+    pub ist1: u64,
+    pub ist2: u64,
+    pub ist3: u64,
+    pub ist4: u64,
+    pub ist5: u64,
+    pub ist6: u64,
+    pub ist7: u64,
     pub reserved2: u64,
     pub reserved3: u16,
     pub io_bp: u16,
@@ -68,7 +68,7 @@ impl GlobalDescriptorTable {
                 .finish();
 
         let tss: Descriptor64 = <DescriptorBuilder as GateDescriptorBuilder<u64>>::tss_descriptor(
-            &raw const ist as u64,
+            &raw const *ist as u64,
             size_of::<InterruptStackTable>() as u64,
             true,
         )
@@ -112,18 +112,24 @@ impl InterruptDescriptorTable {
     pub fn new() -> InterruptDescriptorTable {
         let mut entries = [Descriptor64::default(); 256];
 
-        // exception handler
-        seq!(N in 0..=21 {
-            let address = irq_handler_entry::<N> as *const () as u64;
-            // always switch to stack 1
-            entries[N] = Self::pack_idt_entry(address, 1, Ring::Ring0);
-        });
+        let jmp_targets = {
+            let mut entries = [0; 256];
 
-        // regular irq handlers
-        seq!(N in 32..=255 {
-            let address = irq_handler_entry::<N> as *const () as u64;
-            entries[N] = Self::pack_idt_entry(address, 1, Ring::Ring0);
-        });
+            seq!(N in 0..=255 {
+                // always switch to stack 1
+                entries[N] = irq_handler_entry::<N> as *const () as u64;
+            });
+
+            entries
+        };
+
+        for i in 0..=21 {
+            entries[i] = Self::pack_idt_entry(jmp_targets[i], 1, Ring::Ring0);
+        }
+
+        for i in 32..=255 {
+            entries[i] = Self::pack_idt_entry(jmp_targets[i], 1, Ring::Ring0);
+        }
 
         InterruptDescriptorTable { entries }
     }

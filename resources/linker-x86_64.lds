@@ -58,9 +58,9 @@ SECTIONS
 
     /* cpu local template */
 
-    _marker_cpu_local_template_start = .;
-
     . = ALIGN(CONSTANT(MAXPAGESIZE));
+    
+    _marker_cpu_local_template_start = .;
 
     .cpu_local_template : 
     {

@@ -57,7 +57,11 @@ pub struct BackedVirtualAllocation<'a, T: VirtualAllocatorHandler> {
 
 impl<'a, T: VirtualAllocatorHandler> Drop for BackedVirtualAllocation<'a, T> {
     fn drop(&mut self) {
-        todo!();
+        if self.virtual_allocation.is_dropped {
+            return;
+        }
+
+        todo!()
     }
 }
 

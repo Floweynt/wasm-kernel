@@ -2038,6 +2038,7 @@ dependencies = [
  "log",
  "logos",
  "proc-macros",
+ "rustc-demangle",
  "seq-macro",
  "spin",
  "static_assertions",

@@ -6,19 +6,13 @@ use core::{cell::SyncUnsafeCell, str::Utf8Error};
 pub use lexer::*;
 pub use parse::*;
 
-use limine::request::{ExecutableCmdlineRequest, ModuleRequest};
+use limine::request::ExecutableCmdlineRequest;
 use proc_macros::CmdlineParsable;
 use spin::Once;
 
 use crate::log::options::{
     FormatOptions, FramebufferOptions, LogLevel, LogMode, LogOptions, LogSource, SerialOptions,
 };
-
-// the main command line types
-#[derive(CmdlineParsable)]
-pub enum ModuleCmdline {
-    Symbols,
-}
 
 #[derive(Clone, Copy)]
 pub struct KernelCmdline {
@@ -30,7 +24,10 @@ impl CmdlineParsable for KernelCmdline {
         lexer.parse_block(CmdlineTokenData::EOF, CmdlineTokenData::Comma, |lexer| {
             let tok = lexer.next()?;
             match tok.unwrap_ident()? {
-                "logging" => self.logging.parse(lexer),
+                "logging" => {
+                    lexer.expect(crate::cmdline::CmdlineTokenData::Colon)?;
+                    self.logging.parse(lexer)
+                }
                 _ => return Err(tok.make_error(CmdlineErrorCode::UnknownFlag(&["logging"]))),
             }
         })
@@ -42,10 +39,6 @@ impl CmdlineParsable for KernelCmdline {
 #[used]
 #[unsafe(link_section = ".limine_requests")]
 static CMDLINE_REQUEST: ExecutableCmdlineRequest = ExecutableCmdlineRequest::new();
-
-#[used]
-#[unsafe(link_section = ".limine_requests")]
-static MODULE_REQUEST: ModuleRequest = ModuleRequest::new();
 
 static DEFAULT_OPTIONS: KernelCmdline = KernelCmdline {
     logging: LogOptions {

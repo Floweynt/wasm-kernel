@@ -82,7 +82,7 @@ impl Log for LogImpl {
     }
 
     fn log(&self, record: &log::Record) {
-        let _ = self.lock.lock();
+        let _guard = self.lock.lock();
 
         if let Some(mut serial) = self.serial {
             do_write(record, &mut serial);
@@ -94,7 +94,7 @@ impl Log for LogImpl {
     }
 
     fn flush(&self) {
-        let _ = self.lock.lock();
+        let _guard = self.lock.lock();
 
         if let Some(serial) = self.serial {
             unsafe { serial.flush() };

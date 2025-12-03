@@ -3,18 +3,17 @@ use crate::{
         mp::get_cpu_local_pointer,
         paging::{PageFlags, PageTableSet},
     },
-    mem::{
-        AddressRange, ByteDiff, LOCAL_TABLE, PMM, PageSize, SizeType, VFRange, VirtualAddress,
-        Wrapper, vpa,
-    },
+    mem::{AddressRange, ByteDiff, PMM, PageSize, SizeType, VFRange, VirtualAddress, Wrapper, vpa},
 };
 use alloc::vec::Vec;
 use atomic_enum::atomic_enum;
 use core::{
+    cell::Cell,
     ffi::c_void,
     ops::{Deref, DerefMut},
     ptr,
 };
+use derive_more::{Debug, Display};
 use spin::Once;
 
 extern crate alloc;
@@ -30,13 +29,30 @@ pub enum MpState {
 pub static MP_STATE: AtomicMpState = AtomicMpState::new(MpState::KInit);
 
 #[repr(transparent)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Display)]
+#[display("{_0}")]
+#[debug("CoreId({_0})")]
 pub struct CoreId(pub usize);
 
 // core local stuff
 
 #[repr(C)]
 pub struct CoreLocal<T>(T);
+
+pub macro core_local {
+    {
+        $(
+            $(#[$meta:meta])*
+            $vis:vis $name:ident : $ty:ty = $init:expr;
+        )*
+    } => {
+        $(
+            $(#[$meta])*
+            #[unsafe(link_section = ".cpu_local")]
+            $vis static $name: crate::mp::CoreLocal<$ty> = crate::mp::CoreLocal::new($init);
+        )*
+    }
+}
 
 unsafe extern "C" {
     static _marker_cpu_local_template_start: c_void;
@@ -69,14 +85,11 @@ impl<T> CoreLocal<T> {
     pub fn addr(&self) -> VirtualAddress {
         get_cpu_local_pointer() + self.offset()
     }
-
-    fn get_mut_for(&self, core: CoreId) -> &mut T {
-        unsafe {
-            &mut *(VirtualAddress::new(OFFSET_ARRAY.get().unwrap()[core.0]) + self.offset())
-                .as_ptr_mut()
-        }
-    }
 }
+
+// core locals can always be "sent" and "synced" across threads (which is meaningless)
+unsafe impl<T> Send for CoreLocal<T> {}
+unsafe impl<T> Sync for CoreLocal<T> {}
 
 impl<T> Deref for CoreLocal<T> {
     type Target = T;
@@ -92,8 +105,8 @@ impl<T> DerefMut for CoreLocal<T> {
     }
 }
 
-pub fn get_cpu_local_offset(core: CoreId) -> u64 {
-    OFFSET_ARRAY.get().unwrap()[core.0]
+pub fn get_cpu_local_offset(core: CoreId) -> VirtualAddress {
+    VirtualAddress::from(&raw const OFFSET_ARRAY.get().unwrap()[core.0])
 }
 
 pub fn init_cpu_local_table(tables: &PageTableSet, n_cores: usize) {
@@ -126,15 +139,8 @@ pub fn init_cpu_local_table(tables: &PageTableSet, n_cores: usize) {
             })
             .collect()
     });
-
-    for id in 0..n_cores {
-        let core_id = CoreId(id);
-        *CORE_ID.get_mut_for(core_id) = core_id;
-        LOCAL_TABLE
-            .get_mut_for(core_id)
-            .call_once(|| tables.duplicate(&pmm));
-    }
 }
 
-// some common core-local field
-pub static CORE_ID: CoreLocal<CoreId> = CoreLocal::new(CoreId(0));
+core_local! {
+    pub CORE_ID: Cell<CoreId> = Cell::new(CoreId(0));
+}

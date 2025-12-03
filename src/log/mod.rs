@@ -1,4 +1,4 @@
-use crate::arch::UnwindContext;
+use crate::{arch::UnwindContext, modules::symbols};
 use core::fmt::{self, Display, Result};
 
 pub mod ansi;
@@ -8,6 +8,7 @@ mod log;
 pub mod options;
 
 pub use init::*;
+use rustc_demangle::demangle;
 
 pub trait CharSink: Send + Sync {
     unsafe fn putc(&self, ch: u8);
@@ -34,7 +35,39 @@ impl Display for StackTrace {
 
         let mut i = 0;
         while unsafe { context.valid() } {
-            let _ = writeln!(f, "#{}: {:#016x}", i, unsafe { context.return_address() })?;
+            let addr = unsafe { context.return_address() };
+            let _ = writeln!(f, "#{}: {:#016x}", i, addr)?;
+
+            let (fn_iter, loc) = symbols::symbolize(addr);
+
+            if let Some(loc) = loc {
+                writeln!(
+                    f,
+                    "  at {}:{}:{}",
+                    loc.file.unwrap_or("unk"),
+                    loc.row,
+                    loc.col
+                )?;
+            }
+
+            if let Some(mut iter) = fn_iter {
+                if let Some(first) = iter.next() {
+                    writeln!(f, "  in {:#}", demangle(first.name.unwrap_or("unk")))?;
+                }
+
+                while let Some(inl) = iter.next() {
+                    let loc = inl.location;
+                    writeln!(
+                        f,
+                        "    inlined at {}:{}:{}",
+                        loc.file.unwrap_or("unk"),
+                        loc.row,
+                        loc.col
+                    )?;
+                    writeln!(f, "    into {:#}", demangle(inl.name.unwrap_or("unk")))?;
+                }
+            }
+
             i += 1;
             context = unsafe { context.next() };
         }

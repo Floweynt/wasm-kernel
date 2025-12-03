@@ -36,11 +36,13 @@ trait WritableEntry: Sized {
     fn write<T: Fn(usize) -> usize>(&self, str_resolve: &T, out: &mut Vec<u8>);
 
     fn write_all<T: Fn(usize) -> usize>(vec: &Vec<Self>, str_resolve: &T, out: &mut Vec<u8>) {
-        out.extend_from_slice(&vec.len().to_le_bytes());
-
+        let mut buf = Vec::new();
         for func in vec {
-            func.write(str_resolve, out);
+            func.write(str_resolve, &mut buf);
         }
+
+        out.extend_from_slice(&buf.len().to_le_bytes());
+        out.extend_from_slice(&buf);
     }
 }
 
@@ -137,7 +139,6 @@ impl DebugModuleFileWriter {
         str_resolve: &V,
         iter: U,
     ) {
-        let mut n_written: usize = 0;
         let mut buf = Vec::new();
 
         let mut prev_addr = 0;
@@ -145,7 +146,6 @@ impl DebugModuleFileWriter {
         for (addr, inst) in Self::filter_ranges(iter) {
             assert!(prev_addr < addr, "{:#x}, {:#x}", prev_addr, addr);
             prev_addr = addr;
-            n_written += 1;
             buf.extend_from_slice(
                 &TryInto::<u32>::try_into(addr - 0xffffffff80000000)
                     .unwrap()
@@ -155,14 +155,18 @@ impl DebugModuleFileWriter {
             inst.write(str_resolve, &mut buf);
         }
 
-        out.extend_from_slice(&n_written.to_le_bytes());
+        out.extend_from_slice(&buf.len().to_le_bytes());
         out.extend_from_slice(&buf);
     }
 
     pub fn write(&self) -> Vec<u8> {
         let mut res = Vec::new();
 
+        res.extend_from_slice(&0u64.to_le_bytes());
+
         let str_resolve = self.strings.write(&mut res);
+
+        WritableEntry::write_all(&self.functions, &str_resolve, &mut res);
 
         Self::write_ranges(
             &mut res,
@@ -191,7 +195,6 @@ impl DebugModuleFileWriter {
             .into_iter(),
         );
 
-        WritableEntry::write_all(&self.functions, &str_resolve, &mut res);
         res
     }
 

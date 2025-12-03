@@ -20,7 +20,9 @@ mod arch;
 mod cmdline;
 mod log;
 mod mem;
+mod modules;
 mod mp;
+mod sync;
 
 use ::log::{info, warn};
 use arch::mp::initialize_mp;
@@ -29,19 +31,14 @@ use limine::BaseRevision;
 use limine::firmware_type::FirmwareType;
 use limine::request::{
     BootloaderInfoRequest, FirmwareTypeRequest, RequestsEndMarker, RequestsStartMarker,
-    RsdpRequest, SmbiosRequest, StackSizeRequest,
+    RsdpRequest, SmbiosRequest,
 };
 use log::init_tty;
-use log::options::LogSource;
+use modules::load_modules_early;
 
 #[used]
 #[unsafe(link_section = ".limine_requests")]
 static BASE_REVISION: BaseRevision = BaseRevision::with_revision(4);
-
-// 8MB stack
-#[used]
-#[unsafe(link_section = ".limine_requests")]
-static STACK_SIZE_REQUEST: StackSizeRequest = StackSizeRequest::new().with_size(8 * 1024 * 1024);
 
 #[used]
 #[unsafe(link_section = ".limine_requests")]
@@ -69,11 +66,11 @@ static _END_MARKER: RequestsEndMarker = RequestsEndMarker::new();
 
 fn dump_boot_info() {
     if let Some(res) = BOOTLOADER_INFO_REQUEST.get_response() {
-        info!(target: "init::limine", "bootloader: {} v{}", res.name(), res.version());
+        info!("bootloader: {} v{}", res.name(), res.version());
     }
 
     if let Some(res) = get_cmdline_text() {
-        info!(target: "limine", "cmdline: \"{}\"", res);
+        info!("cmdline: \"{}\"", res);
     }
 
     if let Some(err) = get_cmdline_error() {
@@ -88,7 +85,6 @@ fn dump_boot_info() {
 
     if let Some(res) = FIRMWARE_TYPE_REQUEST.get_response() {
         info!(
-            target: "init",
             "firmware: {}",
             match res.firmware_type() {
                 FirmwareType::X86_BIOS => "bios",
@@ -107,6 +103,7 @@ fn dump_boot_info() {
 unsafe extern "C" fn kmain() -> ! {
     parse_kernel_cmdline();
     init_tty();
+    load_modules_early();
     dump_boot_info();
 
     let addr_space = mem::init();
