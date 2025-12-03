@@ -25,6 +25,7 @@ mod mp;
 mod sync;
 
 use ::log::{info, warn};
+use arch::halt;
 use arch::mp::initialize_mp;
 use cmdline::{get_cmdline_error, get_cmdline_text, parse_kernel_cmdline};
 use limine::BaseRevision;
@@ -33,7 +34,7 @@ use limine::request::{
     BootloaderInfoRequest, FirmwareTypeRequest, RequestsEndMarker, RequestsStartMarker,
     RsdpRequest, SmbiosRequest,
 };
-use log::init_tty;
+use log::{StackTrace, init_tty};
 use modules::load_modules_early;
 
 #[used]
@@ -109,6 +110,12 @@ unsafe extern "C" fn kmain() -> ! {
     let addr_space = mem::init();
 
     initialize_mp(&addr_space);
+}
+
+pub unsafe extern "C" fn ksmp() -> ! {
+    info!("hello from ksmp: {}", StackTrace::current());
+    info!("i did not halt!");
+    halt();
 }
 
 #[cfg(not(test))]

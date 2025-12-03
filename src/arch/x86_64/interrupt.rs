@@ -103,4 +103,5 @@ pub unsafe extern "C" fn irq_handler_t0() -> ! {
 unsafe extern "C" fn irq_handler_t1(addr: *mut InterruptContext) {
     let mut context = unsafe { &*addr };
     info!("hi: {} #{}", context.err, context.id);
+    panic!();
 }

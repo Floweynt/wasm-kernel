@@ -3,14 +3,17 @@ extern crate alloc;
 use super::{dt::InterruptDescriptorTable, paging::PageTableSet};
 use crate::{
     arch::{
-        halt,
         paging::PageFlags,
         x86_64::{GlobalDescriptorTable, InterruptStackTable},
     },
+    ksmp,
     mem::{AddressRange, LOCAL_PAGE_TABLE, PMM, PageSize, VirtualAddress, Wrapper, vpa},
     mp::{CORE_ID, CoreId, core_local, get_cpu_local_offset, init_cpu_local_table},
 };
-use core::{arch::asm, sync::atomic::Ordering};
+use core::{
+    arch::{asm, naked_asm},
+    sync::atomic::Ordering,
+};
 use limine::{mp::Cpu, request::MpRequest};
 use log::info;
 use spin::Once;
@@ -78,6 +81,22 @@ core_local! {
 }
 
 unsafe extern "C" fn initialize_core(cpu: &Cpu) -> ! {
+    fn allocate_sp(size: PageSize, msg: &str) -> u64 {
+        vpa::get_global_vpa()
+            .allocate_backed_padded(
+                &PMM::get(),
+                LOCAL_PAGE_TABLE.get().unwrap(),
+                size,
+                PageSize::new(1),
+                PageFlags::KERNEL_RW,
+            )
+            .expect(msg)
+            .leak()
+            .as_va_range()
+            .end()
+            .value()
+    }
+
     let id = CoreId(cpu.extra.load(Ordering::SeqCst) as usize);
 
     let pt = if id != CoreId(0) {
@@ -105,30 +124,13 @@ unsafe extern "C" fn initialize_core(cpu: &Cpu) -> ! {
     let ist = IST.call_once(|| {
         let mut ist = InterruptStackTable::default();
 
-        fn allocate_sp() -> u64 {
-            vpa::get_global_vpa()
-                .allocate_backed_padded(
-                    &PMM::get(),
-                    LOCAL_PAGE_TABLE.get().unwrap(),
-                    // TODO: don't hardcode idt stack size
-                    PageSize::new(32),
-                    PageSize::new(1),
-                    PageFlags::KERNEL_RW,
-                )
-                .expect("failed to allocate IST")
-                .leak()
-                .as_va_range()
-                .end()
-                .value()
-        }
-
-        ist.ist1 = allocate_sp();
-        ist.ist2 = allocate_sp();
-        ist.ist3 = allocate_sp();
-        ist.ist4 = allocate_sp();
-        ist.ist5 = allocate_sp();
-        ist.ist6 = allocate_sp();
-        ist.ist7 = allocate_sp();
+        ist.ist1 = allocate_sp(PageSize::new(32), "failed to allocate IST");
+        ist.ist2 = allocate_sp(PageSize::new(32), "failed to allocate IST");
+        ist.ist3 = allocate_sp(PageSize::new(32), "failed to allocate IST");
+        ist.ist4 = allocate_sp(PageSize::new(32), "failed to allocate IST");
+        ist.ist5 = allocate_sp(PageSize::new(32), "failed to allocate IST");
+        ist.ist6 = allocate_sp(PageSize::new(32), "failed to allocate IST");
+        ist.ist7 = allocate_sp(PageSize::new(32), "failed to allocate IST");
 
         ist
     });
@@ -138,9 +140,25 @@ unsafe extern "C" fn initialize_core(cpu: &Cpu) -> ! {
     unsafe { gdt.load() };
     unsafe { idt.load() };
 
-    unsafe {
-        asm!("int 0x80");
-    }
+    // we need to re-load the core local, for Reasons
+    init_cpu_local_ptr(id);
 
-    halt();
+    // 8MB stack
+    unsafe {
+        switch_stack_to_ksmp(allocate_sp(
+            PageSize::new(2048),
+            "failed to allocate kernel smp init stack",
+        ))
+    };
+}
+
+#[unsafe(naked)]
+unsafe extern "C" fn switch_stack_to_ksmp(new_sp: u64) -> ! {
+    naked_asm!(
+        "movq %rdi, %rsp",
+        "pushq $0",
+        "jmp {}",
+        options(att_syntax),
+        sym ksmp
+    )
 }
