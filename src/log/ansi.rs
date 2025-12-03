@@ -55,11 +55,11 @@ pub struct ANSIFormatter<'a, T> {
 
 impl<'a, T> ANSIFormatter<'a, T> {
     pub fn new(data: &'a T) -> ANSIFormatter<'a, T> {
-        return ANSIFormatter {
+        ANSIFormatter {
             data,
             flags: ANSIFormatFlags::empty(),
             color: None,
-        };
+        }
     }
 
     pub fn color(&mut self, color: Color) -> &mut Self {

@@ -163,7 +163,7 @@ impl PMM {
         assert!(count.value() == 1);
         let mut free_list = self.pdt.free_list.lock();
 
-        free_list.map(|free_page_number| {
+        free_list.inspect(|&free_page_number| {
             let free_page = get_page_info(free_page_number);
 
             if let page_info::PageState::Free(next) = &free_page.state {
@@ -171,8 +171,6 @@ impl PMM {
             } else {
                 panic!("free list points to non-free page")
             }
-
-            free_page_number
         })
     }
 }

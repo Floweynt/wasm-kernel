@@ -36,7 +36,7 @@ impl Display for StackTrace {
         let mut i = 0;
         while unsafe { context.valid() } {
             let addr = unsafe { context.return_address() };
-            let _ = writeln!(f, "#{}: {:#016x}", i, addr)?;
+            writeln!(f, "#{}: {:#016x}", i, addr)?;
 
             let (fn_iter, loc) = symbols::symbolize(addr);
 
@@ -55,7 +55,7 @@ impl Display for StackTrace {
                     writeln!(f, "  in {:#}", demangle(first.name.unwrap_or("unk")))?;
                 }
 
-                while let Some(inl) = iter.next() {
+                for inl in iter.by_ref() {
                     let loc = inl.location;
                     writeln!(
                         f,

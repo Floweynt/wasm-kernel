@@ -30,7 +30,7 @@ impl OomHandler for BumpHeap {
             let phys_frame = this.pmm.allocate_single_page();
 
             this.addr
-                .map_page_small(&mut this.pmm, this.limit, phys_frame, &PageFlags::KERNEL_RW);
+                .map_page_small(&this.pmm, this.limit, phys_frame, &PageFlags::KERNEL_RW);
 
             this.limit += PageSize::new(1);
         }

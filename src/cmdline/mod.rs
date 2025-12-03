@@ -21,14 +21,14 @@ pub struct KernelCmdline {
 
 impl CmdlineParsable for KernelCmdline {
     fn parse<'a>(&mut self, lexer: &mut CmdlineLexer<'a>) -> Result<(), CmdlineParseError<'a>> {
-        lexer.parse_block(CmdlineTokenData::EOF, CmdlineTokenData::Comma, |lexer| {
+        lexer.parse_block(CmdlineTokenData::Eof, CmdlineTokenData::Comma, |lexer| {
             let tok = lexer.next()?;
             match tok.unwrap_ident()? {
                 "logging" => {
                     lexer.expect(crate::cmdline::CmdlineTokenData::Colon)?;
                     self.logging.parse(lexer)
                 }
-                _ => return Err(tok.make_error(CmdlineErrorCode::UnknownFlag(&["logging"]))),
+                _ => Err(tok.make_error(CmdlineErrorCode::UnknownFlag(&["logging"]))),
             }
         })
     }
@@ -102,7 +102,6 @@ pub fn parse_kernel_cmdline() {
                 // reset to default
                 *state = DEFAULT_OPTIONS;
                 CMDLINE_ERROR.call_once(|| CmdlineError::ParseError(err));
-                return;
             }
         }
     } else {

@@ -50,7 +50,7 @@ pub fn initialize_mp(tables: &PageTableSet) -> ! {
     let n_cores = response.cpus().len();
     info!("x86::initialize_mp(): bootstrapping {} cores", n_cores);
 
-    init_cpu_local_table(&tables, n_cores);
+    init_cpu_local_table(tables, n_cores);
 
     let mut core_id: u64 = 1;
     let bsp_id = response.bsp_lapic_id();
@@ -135,7 +135,7 @@ unsafe extern "C" fn initialize_core(cpu: &Cpu) -> ! {
         ist
     });
     let gdt = GDT.call_once(|| GlobalDescriptorTable::new(ist));
-    let idt = IDT.call_once(|| InterruptDescriptorTable::new());
+    let idt = IDT.call_once(InterruptDescriptorTable::new);
 
     unsafe { gdt.load() };
     unsafe { idt.load() };

@@ -18,18 +18,18 @@ fn parse_int(mut str: &str) -> i64 {
 
     let res;
 
-    if str.starts_with("0x") {
-        res = i64::from_str_radix(&str[2..], 16).unwrap();
-    } else if str.starts_with("0o") {
-        res = i64::from_str_radix(&str[2..], 8).unwrap();
-    } else if str.starts_with("0") {
-        if str == "0" {
+    if let Some(str) = str.strip_prefix("0x") {
+        res = i64::from_str_radix(str, 16).unwrap();
+    } else if let Some(str) = str.strip_prefix("0o") {
+        res = i64::from_str_radix(str, 8).unwrap();
+    } else if let Some(str) = str.strip_prefix("0") {
+        if str.is_empty() {
             res = 0;
         } else {
-            res = i64::from_str_radix(&str[1..], 8).unwrap();
+            res = i64::from_str_radix(str, 8).unwrap();
         }
     } else {
-        res = i64::from_str_radix(str, 10).unwrap();
+        res = str.parse::<i64>().unwrap();
     }
 
     if neg { -res } else { res }
@@ -58,7 +58,7 @@ pub enum CmdlineTokenData<'a> {
     Identifier(&'a str),
     #[regex("-?([1-9][0-9]*|0[0-7]*|0o[0-7]+|0x[0-9a-fA-F]+)", |lex| parse_int(lex.slice()))]
     Number(i64),
-    EOF,
+    Eof,
 }
 
 #[derive(Debug, PartialEq)]
@@ -141,7 +141,7 @@ impl<'a> CmdlineLexer<'a> {
         match lexer.next() {
             Some(Ok(x)) => Ok(CmdlineToken(x, lexer.span())),
             Some(Err(_)) => Err(CmdlineParseError(CmdlineErrorCode::BadToken, lexer.span())),
-            None => Ok(CmdlineToken(CmdlineTokenData::EOF, lexer.span())),
+            None => Ok(CmdlineToken(CmdlineTokenData::Eof, lexer.span())),
         }
     }
 
@@ -177,7 +177,7 @@ impl<'a> CmdlineLexer<'a> {
                     self.lexer.span(),
                 ));
             }
-            None => tok = CmdlineToken(CmdlineTokenData::EOF, self.lexer.span()),
+            None => tok = CmdlineToken(CmdlineTokenData::Eof, self.lexer.span()),
         }
 
         mem::swap(&mut self.current, &mut tok);

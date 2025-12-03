@@ -70,7 +70,7 @@ impl FlanTermTTY {
             flanterm_set_autoflush(context, false);
         }
 
-        FlanTermTTY { context: context }
+        FlanTermTTY { context }
     }
 }
 

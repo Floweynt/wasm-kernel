@@ -303,7 +303,7 @@ impl TryFrom<ByteSize> for PageSize {
     type Error = ();
 
     fn try_from(value: ByteSize) -> Result<Self, Self::Error> {
-        if value.0 % PAGE_SMALL_SIZE != 0 {
+        if !value.0.is_multiple_of(PAGE_SMALL_SIZE) {
             Err(())
         } else {
             Ok(PageSize(value.0 / PAGE_SMALL_SIZE))
@@ -317,7 +317,7 @@ impl ByteSize {
     }
 
     pub fn page_size_roundup(self) -> PageSize {
-        PageSize((self.0 + PAGE_SMALL_SIZE - 1) / PAGE_SMALL_SIZE)
+        PageSize(self.0.div_ceil(PAGE_SMALL_SIZE))
     }
 }
 
@@ -326,7 +326,7 @@ impl From<PageSize> for ByteSize {
         ByteSize(
             value
                 .0
-                .checked_mul(PAGE_SMALL_SIZE.try_into().unwrap())
+                .checked_mul(PAGE_SMALL_SIZE)
                 .unwrap(),
         )
     }
@@ -359,15 +359,15 @@ impl VirtualAddress {
     }
 
     pub fn as_ptr<T>(&self) -> *const T {
-        return self.0 as *const T;
+        self.0 as *const T
     }
 
     pub fn as_ptr_mut<T>(&self) -> *mut T {
-        return self.0 as *mut T;
+        self.0 as *mut T
     }
 
     pub fn is_aligned<T: SizeType>(self, size: T) -> bool {
-        self.0 % size.size_bytes() == 0
+        self.0.is_multiple_of(size.size_bytes())
     }
 }
 
@@ -395,7 +395,7 @@ impl PhysicalAddress {
     }
 
     pub fn is_aligned<T: SizeType>(self, size: T) -> bool {
-        self.0 % size.size_bytes() == 0
+        self.0.is_multiple_of(size.size_bytes())
     }
 }
 

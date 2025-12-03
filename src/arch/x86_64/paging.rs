@@ -21,20 +21,18 @@ use x86::{
     controlregs::cr3_write,
 };
 
-#[cfg(any(target_arch = "x86_64"))]
 #[used]
 #[unsafe(link_section = ".limine_requests")]
 static PAGING_MODE_REQUEST: PagingModeRequest =
     PagingModeRequest::new().with_mode(Mode::FIVE_LEVEL);
 
 pub fn get_higher_half_addr() -> VirtualAddress {
-    if let Some(res) = PAGING_MODE_REQUEST.get_response() {
-        if res.mode() == Mode::FIVE_LEVEL {
+    if let Some(res) = PAGING_MODE_REQUEST.get_response()
+        && res.mode() == Mode::FIVE_LEVEL {
             return HIGHER_HALF_VIRTUAL_ADDRESS_BASE_PML5;
         }
-    }
 
-    return HIGHER_HALF_VIRTUAL_ADDRESS_BASE_PML4;
+    HIGHER_HALF_VIRTUAL_ADDRESS_BASE_PML4
 }
 
 // TODO: this should really be dynamic based on the current paging mode
@@ -144,7 +142,7 @@ impl PageTableSet {
 
     // TODO: figure out semantics for overwriting entries
 
-    fn do_action<T: FnOnce() -> ()>(needs_lock: bool, action: T) {
+    fn do_action<T: FnOnce()>(needs_lock: bool, action: T) {
         if needs_lock {
             let _lock = KERNEL_GLOBAL_PAGE_LOCK.lock();
             action();
@@ -153,7 +151,7 @@ impl PageTableSet {
         }
     }
 
-    pub fn translate(&self, virt: VirtualPageFrameNumber) -> Option<PageFrameNumber> {
+    pub fn translate(&self, _virt: VirtualPageFrameNumber) -> Option<PageFrameNumber> {
         todo!();
     }
 

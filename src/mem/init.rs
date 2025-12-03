@@ -334,7 +334,7 @@ pub fn init() -> PageTableSet {
 
     let mut root_space = PageTableSet::new::<EarlyPMM>(&early_pmm);
 
-    transition_paging(&early_pmm, &layout, &mut root_space);
+    transition_paging(&early_pmm, layout, &mut root_space);
 
     init_pdt(
         &early_pmm,

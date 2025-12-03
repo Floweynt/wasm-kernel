@@ -50,17 +50,15 @@ fn do_write<T: Write>(record: &log::Record, backend: &mut T) {
         };
     }
 
-    if get_cmdline().logging.options.target {
-        if !record.target().is_empty() {
+    if get_cmdline().logging.options.target
+        && !record.target().is_empty() {
             let _ = write!(backend, "{} | ", record.target());
         }
-    }
 
-    if get_cmdline().logging.options.mod_path {
-        if let Some(path) = record.module_path() {
+    if get_cmdline().logging.options.mod_path
+        && let Some(path) = record.module_path() {
             let _ = write!(backend, "{} | ", path);
         }
-    }
 
     if get_cmdline().logging.options.src {
         let _ = write!(

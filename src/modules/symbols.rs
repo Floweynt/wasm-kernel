@@ -160,7 +160,7 @@ impl<'a> SymbolModule<'a> {
         assert!(index < self.functions_count);
         let offset = index * FunctionEntry::SIZE;
         let slice = &self.functions[offset..offset + FunctionEntry::SIZE];
-        FunctionEntry::read(&slice, self.strings)
+        FunctionEntry::read(slice, self.strings)
     }
 
     fn get_location_search(&self, index: usize) -> Option<(u32, LocationEntry<'a>)> {
@@ -255,7 +255,7 @@ pub fn try_init(data: SymbolModule<'static>) -> bool {
 
     GLOBAL_SYMBOLS.call_once(|| data);
 
-    return true;
+    true
 }
 
 pub fn symbolize(

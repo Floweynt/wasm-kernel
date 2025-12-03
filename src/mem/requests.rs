@@ -76,9 +76,9 @@ impl MemoryMapView {
             .get_response()
             .expect("memory map response not received");
 
-        return MemoryMapView {
+        MemoryMapView {
             limine_map: response,
-        };
+        }
     }
 
     fn translate(entry: &memory_map::Entry) -> MemoryMapEntry {

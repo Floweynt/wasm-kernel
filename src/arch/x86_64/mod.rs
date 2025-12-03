@@ -84,7 +84,7 @@ pub fn enable_interrupts() {
 }
 
 pub fn has_interrupts() -> bool {
-    return rflags::read().contains(RFlags::FLAGS_IF);
+    rflags::read().contains(RFlags::FLAGS_IF)
 }
 
 pub const HIGHER_HALF_VIRTUAL_ADDRESS_BASE_PML4: VirtualAddress =
@@ -105,16 +105,16 @@ pub const SMALL_PAGE_PAGE_SIZE: PageSize = PageSize::new(1);
 pub const MEDIUM_PAGE_PAGE_SIZE: PageSize = PageSize::new(512);
 pub const LARGE_PAGE_PAGE_SIZE: PageSize = PageSize::new(512 * 512);
 
-impl Into<VAddr> for VirtualAddress {
-    fn into(self) -> VAddr {
+impl From<VirtualAddress> for VAddr {
+    fn from(val: VirtualAddress) -> Self {
         // TODO: don't unwrap
-        VAddr::from_u64(self.value())
+        VAddr::from_u64(val.value())
     }
 }
 
-impl Into<PAddr> for PhysicalAddress {
-    fn into(self) -> PAddr {
-        PAddr(self.value())
+impl From<PhysicalAddress> for PAddr {
+    fn from(val: PhysicalAddress) -> Self {
+        PAddr(val.value())
     }
 }
 

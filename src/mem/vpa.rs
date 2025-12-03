@@ -193,7 +193,7 @@ impl EarlyAllocator {
             }
         }
 
-        return Err(());
+        Err(())
     }
 }
 
@@ -313,24 +313,22 @@ impl VirtualAllocatorHandler for TreeAllocator {
         let left_cursor = self.by_base.lower_bound(Bound::Excluded(&range.start()));
         let right_cursor = self.by_base.lower_bound(Bound::Included(&range.end()));
 
-        if let Some(left) = left_cursor.get() {
-            if left.range.intersects(&range) {
+        if let Some(left) = left_cursor.get()
+            && left.range.intersects(&range) {
                 return Err(());
             }
-        }
 
-        if let Some(right) = right_cursor.get() {
-            if right.range.intersects(&range) {
+        if let Some(right) = right_cursor.get()
+            && right.range.intersects(&range) {
                 return Err(());
             }
-        }
 
         let mut left_cursor_mut = self
             .by_base
             .lower_bound_mut(Bound::Excluded(&range.start()));
 
-        if let Some(left) = left_cursor_mut.get() {
-            if left.range.end() == range.start() {
+        if let Some(left) = left_cursor_mut.get()
+            && left.range.end() == range.start() {
                 range = VFRange::new(left.range.start(), range.end());
 
                 let node_box = left_cursor_mut.remove().unwrap();
@@ -338,12 +336,11 @@ impl VirtualAllocatorHandler for TreeAllocator {
                     self.by_size.cursor_mut_from_ptr(&*node_box).remove();
                 }
             }
-        }
 
         let mut right_cursor_mut = self.by_base.lower_bound_mut(Bound::Included(&range.end()));
 
-        if let Some(right) = right_cursor_mut.get() {
-            if right.range.start() == range.end() {
+        if let Some(right) = right_cursor_mut.get()
+            && right.range.start() == range.end() {
                 range = VFRange::new(range.start(), right.range.end());
 
                 let node_box = right_cursor_mut.remove().unwrap();
@@ -351,7 +348,6 @@ impl VirtualAllocatorHandler for TreeAllocator {
                     self.by_size.cursor_mut_from_ptr(&*node_box).remove();
                 }
             }
-        }
 
         self.insert(Box::new(VirtualPageNode {
             size_tree_link: RBTreeLink::default(),

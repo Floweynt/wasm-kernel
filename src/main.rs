@@ -112,7 +112,7 @@ unsafe extern "C" fn kmain() -> ! {
     initialize_mp(&addr_space);
 }
 
-pub unsafe extern "C" fn ksmp() -> ! {
+pub extern "C" fn ksmp() -> ! {
     info!("hello from ksmp: {}", StackTrace::current());
     info!("i did not halt!");
     halt();
