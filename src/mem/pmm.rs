@@ -5,11 +5,12 @@ use crate::{
         paging::{PageFlags, PageTableSet},
     },
     mem::{ByteSize, MemoryMapType, Wrapper},
+    sync::IntMutex,
 };
 use core::ptr;
 use log::info;
 use page_info::PageState;
-use spin::{Mutex, Once};
+use spin::Once;
 use static_assertions::const_assert;
 
 pub trait PageFrameAllocator {
@@ -50,7 +51,7 @@ struct PDTData {
     pdt: *mut page_info::Page,
     len: u64,
     // TODO: don't force a global lock on everything
-    free_list: Mutex<Option<PageFrameNumber>>,
+    free_list: IntMutex<Option<PageFrameNumber>>,
 }
 
 unsafe impl Sync for PDTData {}
@@ -107,7 +108,7 @@ pub(super) fn init_pdt(
     let pdt = PDT.call_once(|| PDTData {
         pdt: start.as_ptr_mut(),
         len: hhdm_size.value(),
-        free_list: Mutex::new(None),
+        free_list: IntMutex::new(None),
     });
 
     let mut next_free = None;

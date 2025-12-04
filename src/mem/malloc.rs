@@ -2,11 +2,18 @@ use super::{
     AddressRange, ByteSize, PMM, PageFrameAllocator, PageSize, VFRange, VirtualPageFrameNumber,
     Wrapper,
 };
-use crate::arch::paging::{PageFlags, PageTableSet};
-use core::alloc::GlobalAlloc;
+use crate::{
+    arch::paging::{PageFlags, PageTableSet},
+    sync::IntMutex,
+};
+use core::{
+    alloc::{GlobalAlloc, Layout},
+    cmp::Ordering,
+    ptr::{NonNull, null_mut},
+};
 use log::info;
-use spin::{Mutex, Once};
-use talc::{OomHandler, Span, Talc, Talck};
+use spin::Once;
+use talc::{OomHandler, Span, Talc};
 
 struct BumpHeap {
     range: VFRange,
@@ -50,31 +57,78 @@ impl OomHandler for BumpHeap {
 // TODO: this should delegate stuff, but im lazy
 
 struct GlobalAllocImpl {
-    delegate: Once<Talck<Mutex<()>, BumpHeap>>,
+    delegate: Once<IntMutex<Talc<BumpHeap>>>,
 }
 
 unsafe impl GlobalAlloc for GlobalAllocImpl {
     unsafe fn alloc(&self, layout: core::alloc::Layout) -> *mut u8 {
-        let delegate = self.delegate.get().expect("alloc not initialized");
-
-        unsafe { delegate.alloc(layout) }
+        let mut delegate = self.delegate.get().expect("alloc not initialized").lock();
+        unsafe { delegate.malloc(layout).map_or(null_mut(), |nn| nn.as_ptr()) }
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: core::alloc::Layout) {
-        let delegate = self.delegate.get().expect("alloc not initialized");
-
-        unsafe { delegate.dealloc(ptr, layout) };
+        let mut delegate = self.delegate.get().expect("alloc not initialized").lock();
+        unsafe { delegate.free(NonNull::new_unchecked(ptr), layout) };
     }
 
     unsafe fn realloc(
         &self,
         ptr: *mut u8,
-        layout: core::alloc::Layout,
+        old_layout: core::alloc::Layout,
         new_size: usize,
     ) -> *mut u8 {
         let delegate = self.delegate.get().expect("alloc not initialized");
 
-        unsafe { delegate.realloc(ptr, layout, new_size) }
+        let nn_ptr = unsafe { NonNull::new_unchecked(ptr) };
+
+        match new_size.cmp(&old_layout.size()) {
+            Ordering::Greater => {
+                if let Ok(nn) =
+                    unsafe { delegate.lock().grow_in_place(nn_ptr, old_layout, new_size) }
+                {
+                    return nn.as_ptr();
+                }
+
+                let new_layout =
+                    unsafe { Layout::from_size_align_unchecked(new_size, old_layout.align()) };
+
+                let mut lock = delegate.lock();
+                let allocation = match unsafe { lock.malloc(new_layout) } {
+                    Ok(ptr) => ptr,
+                    Err(_) => return null_mut(),
+                };
+
+                if old_layout.size() > 0x10000 {
+                    drop(lock);
+                    unsafe {
+                        allocation
+                            .as_ptr()
+                            .copy_from_nonoverlapping(ptr, old_layout.size())
+                    };
+                    lock = delegate.lock();
+                } else {
+                    unsafe {
+                        allocation
+                            .as_ptr()
+                            .copy_from_nonoverlapping(ptr, old_layout.size())
+                    };
+                }
+
+                unsafe { lock.free(nn_ptr, old_layout) };
+                allocation.as_ptr()
+            }
+
+            Ordering::Less => {
+                unsafe {
+                    delegate
+                        .lock()
+                        .shrink(NonNull::new_unchecked(ptr), old_layout, new_size)
+                };
+                ptr
+            }
+
+            Ordering::Equal => ptr,
+        }
     }
 }
 
@@ -87,7 +141,7 @@ pub(super) fn init_malloc(heap_range: VFRange, addr: PageTableSet) {
     info!("mem::init_malloc(): initializing heap");
 
     GLOBAL_ALLOC.delegate.call_once(|| {
-        Talck::new(Talc::new(BumpHeap {
+        IntMutex::new(Talc::new(BumpHeap {
             range: heap_range,
             limit: heap_range.start(),
             pmm: PMM::get(),

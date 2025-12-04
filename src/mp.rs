@@ -18,6 +18,7 @@ use spin::Once;
 
 extern crate alloc;
 
+#[derive(PartialEq, Eq)]
 #[atomic_enum]
 pub enum MpState {
     KInit,

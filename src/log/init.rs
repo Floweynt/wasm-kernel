@@ -1,8 +1,8 @@
 use super::flanterm::FlanTermTTY;
-use crate::{arch::SerialCharSink, cmdline::get_cmdline, log::CharSink};
+use crate::{arch::SerialCharSink, cmdline::get_cmdline, log::CharSink, sync::IntMutex};
 use limine::request::FramebufferRequest;
 use log::{LevelFilter, info, set_logger};
-use spin::{Once, mutex::Mutex};
+use spin::Once;
 
 use super::log::LogImpl;
 
@@ -31,7 +31,7 @@ pub fn init_tty() {
     }
 
     set_logger(LOGGER.call_once(|| LogImpl {
-        lock: Mutex::new(()),
+        lock: IntMutex::new(()),
         serial,
         framebuffer,
     }))

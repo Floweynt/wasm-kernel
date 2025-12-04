@@ -4,13 +4,13 @@ use super::CharSink;
 use crate::{
     cmdline::get_cmdline,
     log::ansi::{ANSIFormatter, Color},
+    sync::IntMutex,
 };
 use core::fmt::Result;
 use log::Log;
-use spin::Mutex;
 
 pub struct LogImpl {
-    pub(super) lock: Mutex<()>,
+    pub(super) lock: IntMutex<()>,
     pub(super) serial: Option<&'static dyn CharSink>,
     pub(super) framebuffer: Option<&'static dyn CharSink>,
 }
@@ -50,15 +50,15 @@ fn do_write<T: Write>(record: &log::Record, backend: &mut T) {
         };
     }
 
-    if get_cmdline().logging.options.target
-        && !record.target().is_empty() {
-            let _ = write!(backend, "{} | ", record.target());
-        }
+    if get_cmdline().logging.options.target && !record.target().is_empty() {
+        let _ = write!(backend, "{} | ", record.target());
+    }
 
     if get_cmdline().logging.options.mod_path
-        && let Some(path) = record.module_path() {
-            let _ = write!(backend, "{} | ", path);
-        }
+        && let Some(path) = record.module_path()
+    {
+        let _ = write!(backend, "{} | ", path);
+    }
 
     if get_cmdline().logging.options.src {
         let _ = write!(

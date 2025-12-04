@@ -2035,6 +2035,7 @@ dependencies = [
  "flanterm",
  "intrusive-collections",
  "limine",
+ "lock_api",
  "log",
  "logos",
  "proc-macros",

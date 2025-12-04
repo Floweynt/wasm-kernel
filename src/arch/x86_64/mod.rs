@@ -70,21 +70,42 @@ pub unsafe extern "C" fn memset(dest: *mut u8, byte: i32, len: usize) -> *mut u8
 }
 
 #[inline(always)]
-pub fn disable_interrupts() {
+fn disable_interrupts() {
     unsafe {
         asm!("cli");
     }
 }
 
 #[inline(always)]
-pub fn enable_interrupts() {
+fn enable_interrupts() {
     unsafe {
         asm!("sti");
     }
 }
 
-pub fn has_interrupts() -> bool {
-    rflags::read().contains(RFlags::FLAGS_IF)
+#[repr(transparent)]
+#[derive(PartialEq, Eq, Clone, Copy)]
+pub struct IrqState(bool);
+
+impl IrqState {
+    #[inline(always)]
+    pub fn save() -> IrqState {
+        IrqState(rflags::read().contains(RFlags::FLAGS_IF))
+    }
+
+    #[inline(always)]
+    pub fn restore(self) {
+        if self.0 {
+            enable_interrupts();
+        } else {
+            disable_interrupts();
+        }
+    }
+}
+
+#[inline(always)]
+pub fn irq_disable() {
+    disable_interrupts();
 }
 
 pub const HIGHER_HALF_VIRTUAL_ADDRESS_BASE_PML4: VirtualAddress =
@@ -118,27 +139,6 @@ impl From<PhysicalAddress> for PAddr {
     }
 }
 
-pub unsafe fn switch_stack(
-    stack: VirtualAddress,
-    target: extern "C" fn(u64) -> !,
-    param: u64,
-) -> ! {
-    assert!(stack.is_aligned(ByteSize::new(16)));
-    unsafe {
-        asm!(
-            "movq {stack}, %rsp",
-            "pushq $0",
-            "movq {param}, %rdi",
-            "jmp {target}",
-            stack = in(reg) stack.value(),
-            target = in(reg) target,
-            param = in(reg) param
-        );
-    }
-
-    unreachable!();
-}
-
 pub fn load_core_local_ptr() -> VirtualAddress {
     let value: u64;
     unsafe {
@@ -151,4 +151,3 @@ pub fn load_core_local_ptr() -> VirtualAddress {
 
     VirtualAddress::new(value)
 }
-

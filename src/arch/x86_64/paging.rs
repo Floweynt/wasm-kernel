@@ -9,10 +9,9 @@ use crate::{
     mem::{
         PageFrameAllocator, PageFrameNumber, PageSize, PhysicalAddress, VirtualAddress,
         VirtualPageFrameNumber, Wrapper,
-    },
+    }, sync::IntMutex,
 };
 use limine::{paging::Mode, request::PagingModeRequest};
-use spin::Mutex;
 use x86::{
     bits64::paging::{
         PAGE_SIZE_ENTRIES, PAddr, PD, PDEntry, PDFlags, PDPT, PDPTEntry, PDPTFlags, PML4,
@@ -110,7 +109,7 @@ macro tl_flag($expr:expr, $type:ident::$flag_name:ident) {
     }
 }
 
-static KERNEL_GLOBAL_PAGE_LOCK: Mutex<()> = Mutex::new(());
+static KERNEL_GLOBAL_PAGE_LOCK: IntMutex<()> = IntMutex::new(());
 
 impl PageTableSet {
     pub fn new<T: PageFrameAllocator>(alloc: &T) -> PageTableSet {

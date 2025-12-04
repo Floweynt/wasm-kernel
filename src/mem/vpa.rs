@@ -3,11 +3,11 @@
 extern crate alloc;
 
 use super::{AddressRange, PageFrameAllocator, PageSize, VFRange, VirtualPageFrameNumber};
-use crate::arch::paging::{PageFlags, PageTableSet};
+use crate::{arch::paging::{PageFlags, PageTableSet}, sync::IntMutex};
 use alloc::boxed::Box;
 use arrayvec::ArrayVec;
 use intrusive_collections::{Bound, KeyAdapter, RBTree, RBTreeLink, UnsafeRef, intrusive_adapter};
-use spin::{Mutex, Once};
+use spin::Once;
 
 pub trait VirtualAllocatorHandler {
     fn allocate(&mut self, size: PageSize) -> Option<VirtualPageFrameNumber>;
@@ -18,7 +18,7 @@ pub trait VirtualAllocatorHandler {
 }
 
 pub struct VirtualAllocator<T: VirtualAllocatorHandler> {
-    inner: Mutex<T>,
+    inner: IntMutex<T>,
 }
 
 unsafe impl<T: VirtualAllocatorHandler> Sync for VirtualAllocator<T> {}
@@ -84,7 +84,7 @@ impl VirtualAllocator<EarlyAllocator> {
         }
 
         Ok(VirtualAllocator {
-            inner: Mutex::new(early),
+            inner: IntMutex::new(early),
         })
     }
 }
@@ -92,7 +92,7 @@ impl VirtualAllocator<EarlyAllocator> {
 impl VirtualAllocator<TreeAllocator> {
     pub fn tree(range: VirtualAllocator<EarlyAllocator>) -> VirtualAllocator<TreeAllocator> {
         VirtualAllocator {
-            inner: Mutex::new(TreeAllocator::new(&*range.inner.lock())),
+            inner: IntMutex::new(TreeAllocator::new(&*range.inner.lock())),
         }
     }
 }

@@ -21,6 +21,7 @@ derive_more = { version = "2.0.1", default-features = false, features = ["add_as
 flanterm = { version = "0.1.0", path = "flanterm" }
 intrusive-collections = "0.9.7"
 limine = "0.5.0"
+lock_api = "0.4.14"
 log = "0.4.28"
 logos = { version = "0.15.1", default-features = false, features = ["export_derive", "logos-derive"] }
 proc-macros = { version = "0.1.0", path = "proc-macros" }

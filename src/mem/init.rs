@@ -32,6 +32,8 @@ unsafe extern "C" {
 struct EarlyPMMInner {
     index: usize,
     offset: PageSize,
+
+    #[cfg(debug_assertions)]
     is_frozen: bool,
 }
 
@@ -43,7 +45,10 @@ impl PageFrameAllocator for EarlyPMM {
     fn allocate_single_page(&self) -> PageFrameNumber {
         let mut state = self.data.borrow_mut();
 
-        assert!(!state.is_frozen);
+        #[cfg(debug_assertions)]
+        {
+            assert!(!state.is_frozen);
+        }
 
         let entries = MemoryMapView::get();
 
@@ -326,6 +331,7 @@ pub fn init() -> PageTableSet {
         data: RefCell::new(EarlyPMMInner {
             index: 0,
             offset: PageSize::new(0),
+            #[cfg(debug_assertions)]
             is_frozen: false,
         }),
     };
